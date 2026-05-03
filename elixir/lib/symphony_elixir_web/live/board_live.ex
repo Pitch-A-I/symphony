@@ -179,15 +179,15 @@ defmodule SymphonyElixirWeb.BoardLive do
                     </div>
 
                     <div class="ticket-badges">
-                      <span :if={task.runtime_status} class={["runtime-badge", task.runtime_status.kind]}>
-                        <%= task.runtime_status.label %>
+                      <span :if={visible_runtime_badge(task.runtime_status)} class={["runtime-badge", task.runtime_status.kind]}>
+                        <%= visible_runtime_badge(task.runtime_status) %>
                       </span>
                       <span :if={task.priority && task.priority < 5} class="soft-badge">
                         P<%= task.priority %>
                       </span>
                       <span :if={task.pr_count > 0} class="soft-badge">PR</span>
                       <span :if={task.comment_count > 0} class="soft-badge"><%= task.comment_count %> comments</span>
-                      <span :for={label <- Enum.take(task.labels, 2)} class="soft-badge"><%= label %></span>
+                      <span :for={label <- Enum.take(visible_labels(task.labels), 2)} class="soft-badge"><%= label %></span>
                     </div>
 
                     <div class="ticket-meta">
@@ -253,7 +253,7 @@ defmodule SymphonyElixirWeb.BoardLive do
             </span>
             <span :if={@task.value_name} class="detail-chip"><%= @task.value_name %></span>
             <span :if={@task.priority} class="detail-chip">P<%= @task.priority %></span>
-            <span :for={label <- Enum.take(@task.labels, 4)} class="detail-chip"><%= label %></span>
+            <span :for={label <- Enum.take(visible_labels(@task.labels), 4)} class="detail-chip"><%= label %></span>
           </div>
 
           <section class="agent-progress-panel" aria-label="Agent progress">
@@ -419,6 +419,16 @@ defmodule SymphonyElixirWeb.BoardLive do
   defp runtime_class(%{runtime_status: %{kind: "running"}}), do: "is-running"
   defp runtime_class(%{runtime_status: %{kind: "retrying"}}), do: "is-retrying"
   defp runtime_class(_task), do: nil
+
+  defp visible_runtime_badge(%{kind: "running"}), do: nil
+  defp visible_runtime_badge(%{label: label}) when is_binary(label), do: label
+  defp visible_runtime_badge(_runtime_status), do: nil
+
+  defp visible_labels(labels) when is_list(labels) do
+    Enum.reject(labels, &(String.downcase(to_string(&1)) == "symphony"))
+  end
+
+  defp visible_labels(_labels), do: []
 
   defp group_by_options do
     [

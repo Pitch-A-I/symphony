@@ -775,7 +775,8 @@ defmodule SymphonyElixir.ExtensionsTest do
     assert html =~ "data-drop-state=\"Todo\""
     assert html =~ "MT-HTTP"
     assert html =~ "Dispatch active PM task"
-    assert html =~ "Active"
+    refute html =~ ">Active<"
+    refute html =~ "runtime-badge running"
     assert html =~ "MT-890"
     refute html =~ "SYMPHONY STATUS"
 
@@ -788,6 +789,7 @@ defmodule SymphonyElixir.ExtensionsTest do
     detail = render_click(view, "open_task", %{"task_id" => "issue-http"})
     assert detail =~ "Agent progress"
     assert detail =~ "Checklist"
+    refute detail =~ "detail-chip\">symphony"
     assert detail =~ "Render agent progress like the Symphony demo."
     assert detail =~ "Inspect the current board"
     assert detail =~ "Render nested checkboxes"
