@@ -40,6 +40,19 @@ defmodule SymphonyElixir.ExtensionsTest do
   end
 
   defmodule FakePitchAIPMClient do
+    def reconcile_blocked_tasks do
+      {:ok,
+       %{
+         groups: 0,
+         blocked_tasks: 0,
+         created_blocker_tasks: 0,
+         reopened_blocker_tasks: 0,
+         merged_duplicate_blocker_tasks: 0,
+         linked_dependencies: 0,
+         blocker_task_ids: []
+       }}
+    end
+
     def move_issue_on_board(task_id, state_name, opts) do
       if recipient = Application.get_env(:symphony_elixir, :pitchai_pm_test_recipient) do
         send(recipient, {:pitchai_pm_move_issue_on_board, task_id, state_name, opts})
@@ -80,6 +93,7 @@ defmodule SymphonyElixir.ExtensionsTest do
                  updated_at: "2026-05-02T12:00:00Z",
                  created_at: "2026-05-01T12:00:00Z",
                  comment_count: 1,
+                 downstream_count: 3,
                  pr_count: 0,
                  workpad_updated_at: nil
                }
@@ -107,6 +121,7 @@ defmodule SymphonyElixir.ExtensionsTest do
                  updated_at: "2026-05-02T12:00:00Z",
                  created_at: "2026-05-01T12:00:00Z",
                  comment_count: 0,
+                 downstream_count: 0,
                  pr_count: 0,
                  workpad_updated_at: nil
                }
@@ -134,6 +149,7 @@ defmodule SymphonyElixir.ExtensionsTest do
                  updated_at: "2026-05-02T12:00:00Z",
                  created_at: "2026-05-01T12:00:00Z",
                  comment_count: 0,
+                 downstream_count: 0,
                  pr_count: 0,
                  workpad_updated_at: nil
                }
@@ -161,6 +177,7 @@ defmodule SymphonyElixir.ExtensionsTest do
                  updated_at: "2026-05-02T13:00:00Z",
                  created_at: "2026-05-01T13:00:00Z",
                  comment_count: 1,
+                 downstream_count: 0,
                  blocked_reason: "No application source files are present in the provided workspace.",
                  pr_count: 0,
                  workpad_updated_at: "2026-05-02T13:00:00Z"
@@ -847,6 +864,7 @@ defmodule SymphonyElixir.ExtensionsTest do
     assert dashboard_css =~ ".board-columns"
     assert dashboard_css =~ ".ticket-card"
     assert dashboard_css =~ ".ticket-blocked-reason"
+    assert dashboard_css =~ ".dependency-badge"
     assert dashboard_css =~ ".blocked-reason-panel"
     assert dashboard_css =~ ".state-spinner"
     assert dashboard_css =~ ".drag-placeholder"
@@ -911,6 +929,7 @@ defmodule SymphonyElixir.ExtensionsTest do
     assert html =~ "Human Review"
     assert html =~ "TODO App"
     assert html =~ "MT-BLOCK"
+    assert html =~ "3 downstream"
     assert html =~ "ticket-blocked-reason"
     assert html =~ "No application source files are present in the provided workspace."
     refute html =~ "Hidden columns"

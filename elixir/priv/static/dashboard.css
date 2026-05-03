@@ -530,7 +530,8 @@ body.is-kanban-dragging {
 }
 
 .soft-badge,
-.runtime-badge {
+.runtime-badge,
+.dependency-badge {
   max-width: 100%;
   overflow: hidden;
   padding: 0.1rem 0.28rem;
@@ -551,6 +552,12 @@ body.is-kanban-dragging {
 .runtime-badge.retrying {
   background: #fff0f4;
   color: #a83255;
+}
+
+.dependency-badge {
+  border: 1px solid rgba(37, 99, 235, 0.18);
+  background: #eef4ff;
+  color: #2456b4;
 }
 
 .ticket-meta {

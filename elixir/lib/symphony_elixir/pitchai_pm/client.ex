@@ -5,11 +5,14 @@ defmodule SymphonyElixir.PitchAIPM.Client do
 
   alias SymphonyElixir.Config
   alias SymphonyElixir.Linear.Issue
+  alias SymphonyElixir.PitchAIPM.BlockerReconciler
 
   @default_limit 100
   @board_task_limit_per_state 1_000
   @connect_timeout 5_000
   @query_timeout 15_000
+  @blocker_reconciler_source "pitchai_symphony_blocker_reconciler"
+  @blocker_task_labels ["auto-blocker", "blocker", "symphony"]
 
   @board_default_states [
     %{
@@ -384,6 +387,23 @@ defmodule SymphonyElixir.PitchAIPM.Client do
     end
   end
 
+  @spec reconcile_blocked_tasks() :: {:ok, map()} | {:error, term()}
+  def reconcile_blocked_tasks do
+    project_id = Config.settings!().tracker.project_id |> clean_string()
+
+    if is_nil(project_id) do
+      {:error, :missing_pitchai_pm_project_id}
+    else
+      with {:ok, project} <- fetch_board_project(project_id),
+           {:ok, projects} <- fetch_board_scope_projects(project),
+           {:ok, blocked_tasks} <- fetch_blocked_tasks(Enum.map(projects, & &1.id)) do
+        blocked_tasks
+        |> BlockerReconciler.group_blocked_tasks()
+        |> reconcile_blocker_groups()
+      end
+    end
+  end
+
   @spec create_comment(String.t(), String.t()) :: :ok | {:error, term()}
   def create_comment(task_id, body) when is_binary(task_id) and is_binary(body) do
     sql = """
@@ -395,6 +415,484 @@ defmodule SymphonyElixir.PitchAIPM.Client do
       {:ok, _result} -> :ok
       {:error, reason} -> {:error, reason}
     end
+  end
+
+  defp fetch_blocked_tasks(scope_project_ids) when is_list(scope_project_ids) do
+    sql = """
+    select
+      t.id::text as id,
+      coalesce(nullif(trim(t.public_id), ''), 'PM-' || substring(t.id::text, 1, 8)) as identifier,
+      t.name as title,
+      t.project_id::text as project_id,
+      p.name as project_name,
+      tr.repo_full_name,
+      tr.workspace_path,
+      coalesce(tr.labels, array[]::text[]) as labels,
+      (
+        select c.body
+        from pitchai_symphony.task_comments c
+        where c.task_id = t.id
+          and lower(trim(coalesce(c.body, ''))) like any(array['blocked%', 'true blocker%'])
+        order by c.created_at desc, c.id desc
+        limit 1
+      ) as blocked_reason,
+      w.body as workpad_body
+    from public.tasks t
+    left join public.projects p on p.id = t.project_id
+    left join pitchai_symphony.task_tracking tr on tr.task_id = t.id
+    left join pitchai_symphony.task_workpads w on w.task_id = t.id
+    where t.project_id::text = any($1::text[])
+      and lower(trim(coalesce(t.state_name, ''))) = 'blocked'
+    order by p.name, t.updated_at desc nulls last, t.created_at desc nulls last, t.name
+    """
+
+    with {:ok, result} <- query(sql, [scope_project_ids]) do
+      {:ok, Enum.map(result.rows, &blocked_task_row_to_map(result.columns, &1))}
+    end
+  end
+
+  defp reconcile_blocker_groups(groups) when is_list(groups) do
+    base_result = %{
+      groups: length(groups),
+      blocked_tasks: Enum.sum(Enum.map(groups, &length(&1.tasks))),
+      created_blocker_tasks: 0,
+      reopened_blocker_tasks: 0,
+      merged_duplicate_blocker_tasks: 0,
+      linked_dependencies: 0,
+      blocker_task_ids: []
+    }
+
+    Enum.reduce_while(groups, {:ok, base_result}, fn group, {:ok, acc} ->
+      case reconcile_blocker_group(group) do
+        {:ok, group_result} ->
+          {:cont, {:ok, merge_blocker_reconcile_result(acc, group_result)}}
+
+        {:error, reason} ->
+          {:halt, {:error, reason}}
+      end
+    end)
+  end
+
+  defp reconcile_blocker_group(group) when is_map(group) do
+    with {:ok, blocker_task, created?, reopened?, duplicate_count} <- fetch_or_create_blocker_task(group),
+         {:ok, linked_count} <- link_blocked_tasks_to_blocker(group, blocker_task) do
+      {:ok,
+       %{
+         created_blocker_tasks: if(created?, do: 1, else: 0),
+         reopened_blocker_tasks: if(reopened?, do: 1, else: 0),
+         merged_duplicate_blocker_tasks: duplicate_count,
+         linked_dependencies: linked_count,
+         blocker_task_ids: [blocker_task.id]
+       }}
+    end
+  end
+
+  defp fetch_or_create_blocker_task(group) do
+    case fetch_existing_blocker_tasks(group.project_id, group.blocker_key) do
+      {:ok, []} ->
+        with {:ok, blocker_task} <- insert_blocker_task(group) do
+          {:ok, blocker_task, true, false, 0}
+        end
+
+      {:ok, [canonical_task | duplicate_tasks]} ->
+        with {:ok, duplicate_count} <- merge_duplicate_blocker_tasks(canonical_task, duplicate_tasks),
+             {:ok, refreshed_task, reopened?} <- refresh_blocker_task(canonical_task, group) do
+          {:ok, refreshed_task, false, reopened?, duplicate_count}
+        end
+
+      {:error, reason} ->
+        {:error, reason}
+    end
+  end
+
+  defp fetch_existing_blocker_tasks(project_id, blocker_key) do
+    sql = """
+    select
+      t.id::text as id,
+      coalesce(nullif(trim(t.public_id), ''), 'PM-' || substring(t.id::text, 1, 8)) as identifier,
+      t.state_name as state
+    from public.tasks t
+    join pitchai_symphony.task_tracking tr on tr.task_id = t.id
+    where t.project_id = $1::text::uuid
+      and lower(trim(coalesce(t.state_name, ''))) <> 'duplicate'
+      and coalesce(
+        tr.metadata->>'symphony_kind',
+        case when jsonb_typeof(tr.metadata) = 'string' then ((tr.metadata #>> '{}')::jsonb)->>'symphony_kind' end
+      ) = 'blocker_task'
+      and coalesce(
+        tr.metadata->>'blocker_key',
+        case when jsonb_typeof(tr.metadata) = 'string' then ((tr.metadata #>> '{}')::jsonb)->>'blocker_key' end
+      ) = $2::text
+    order by
+      case when lower(trim(coalesce(t.state_name, ''))) = any($3::text[]) then 1 else 0 end,
+      t.updated_at desc nulls last,
+      t.created_at desc nulls last
+    """
+
+    case query(sql, [project_id, blocker_key, terminal_state_keys()]) do
+      {:ok, result} ->
+        {:ok,
+         Enum.map(result.rows, fn [id, identifier, state] ->
+           %{id: id, identifier: identifier, state: state}
+         end)}
+
+      {:error, reason} ->
+        {:error, reason}
+    end
+  end
+
+  defp insert_blocker_task(group) do
+    description = blocker_description(group)
+    metadata = blocker_tracking_metadata(group)
+    comment_body = blocker_task_comment_body(group)
+
+    sql = """
+    with inserted_task as (
+      insert into public.tasks(id, created_at, updated_at, name, description, project_id, state_name, value_name, is_bug)
+      values (gen_random_uuid(), now(), now(), $1::text, $2::text::jsonb, $3::text::uuid, 'Suggested', 'Task', false)
+      returning id, public_id, state_name
+    ),
+    tracking as (
+      insert into pitchai_symphony.task_tracking(task_id, priority, assignee, labels, metadata)
+      select id, 1, 'symphony', $4::text[], $5::text::jsonb
+      from inserted_task
+      on conflict (task_id)
+      do update set
+        priority = excluded.priority,
+        assignee = excluded.assignee,
+        labels = (
+          select array_agg(distinct label order by label)
+          from unnest(coalesce(pitchai_symphony.task_tracking.labels, array[]::text[]) || excluded.labels) label
+        ),
+        metadata = pitchai_symphony.task_tracking.metadata || excluded.metadata,
+        updated_at = now()
+      returning task_id
+    ),
+    comment as (
+      insert into pitchai_symphony.task_comments(task_id, body, author, kind, metadata)
+      select id, $6::text, 'symphony', 'blocker', $7::text::jsonb
+      from inserted_task
+      returning task_id
+    )
+    select
+      id::text,
+      coalesce(nullif(trim(public_id), ''), 'PM-' || substring(id::text, 1, 8)) as identifier,
+      state_name
+    from inserted_task
+    """
+
+    params = [
+      blocker_title(group),
+      Jason.encode!(description),
+      group.project_id,
+      @blocker_task_labels,
+      Jason.encode!(metadata),
+      comment_body,
+      Jason.encode!(%{"source" => @blocker_reconciler_source, "blocker_key" => group.blocker_key})
+    ]
+
+    case query(sql, params) do
+      {:ok, %{rows: [[id, identifier, state]]}} -> {:ok, %{id: id, identifier: identifier, state: state}}
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  defp refresh_blocker_task(blocker_task, group) do
+    description = blocker_description(group)
+    metadata = blocker_tracking_metadata(group)
+
+    sql = """
+    with current_task as (
+      select id, state_name
+      from public.tasks
+      where id = $1::text::uuid
+    ),
+    updated_task as (
+      update public.tasks t
+      set description = coalesce(t.description, '{}'::jsonb) || $2::text::jsonb,
+          state_name = case
+            when lower(trim(coalesce(t.state_name, ''))) = any($3::text[]) then 'Suggested'
+            else t.state_name
+          end,
+          updated_at = now()
+      from current_task c
+      where t.id = c.id
+      returning
+        t.id,
+        coalesce(nullif(trim(t.public_id), ''), 'PM-' || substring(t.id::text, 1, 8)) as identifier,
+        c.state_name as from_state,
+        t.state_name as to_state
+    ),
+    tracking as (
+      insert into pitchai_symphony.task_tracking(task_id, priority, assignee, labels, metadata)
+      select id, 1, 'symphony', $4::text[], $5::text::jsonb
+      from updated_task
+      on conflict (task_id)
+      do update set
+        priority = excluded.priority,
+        assignee = excluded.assignee,
+        labels = (
+          select array_agg(distinct label order by label)
+          from unnest(coalesce(pitchai_symphony.task_tracking.labels, array[]::text[]) || excluded.labels) label
+        ),
+        metadata = pitchai_symphony.task_tracking.metadata || excluded.metadata,
+        updated_at = now()
+      returning task_id
+    ),
+    state_event as (
+      insert into pitchai_symphony.task_state_events(task_id, from_state, to_state, actor, reason, metadata)
+      select
+        id,
+        from_state,
+        to_state,
+        'symphony',
+        'blocker_reconciler_reopened',
+        jsonb_build_object('source', $6::text, 'blocker_key', $7::text)
+      from updated_task
+      where lower(trim(coalesce(from_state, ''))) = any($3::text[])
+        and from_state is distinct from to_state
+      returning task_id
+    )
+    select
+      id::text,
+      identifier,
+      to_state,
+      exists(select 1 from state_event) as reopened
+    from updated_task
+    """
+
+    params = [
+      blocker_task.id,
+      Jason.encode!(description),
+      terminal_state_keys(),
+      @blocker_task_labels,
+      Jason.encode!(metadata),
+      @blocker_reconciler_source,
+      group.blocker_key
+    ]
+
+    case query(sql, params) do
+      {:ok, %{rows: [[id, identifier, state, reopened?]]}} ->
+        {:ok, %{id: id, identifier: identifier, state: state}, reopened?}
+
+      {:ok, %{rows: []}} ->
+        {:error, :blocker_task_not_found}
+
+      {:error, reason} ->
+        {:error, reason}
+    end
+  end
+
+  defp merge_duplicate_blocker_tasks(_canonical_task, []), do: {:ok, 0}
+
+  defp merge_duplicate_blocker_tasks(canonical_task, duplicate_tasks) do
+    Enum.reduce_while(duplicate_tasks, {:ok, 0}, fn duplicate_task, {:ok, count} ->
+      case merge_duplicate_blocker_task(canonical_task, duplicate_task) do
+        :ok -> {:cont, {:ok, count + 1}}
+        {:error, reason} -> {:halt, {:error, reason}}
+      end
+    end)
+  end
+
+  defp merge_duplicate_blocker_task(canonical_task, duplicate_task) do
+    sql = """
+    with moved_dependencies as (
+      insert into pitchai_symphony.task_dependencies(task_id, blocker_task_id, relation_type, metadata)
+      select
+        dep.task_id,
+        $1::text::uuid,
+        dep.relation_type,
+        dep.metadata || jsonb_build_object(
+          'source', $3::text,
+          'merged_from_blocker_task_id', $2::text
+        )
+      from pitchai_symphony.task_dependencies dep
+      where dep.blocker_task_id = $2::text::uuid
+        and dep.task_id <> $1::text::uuid
+      on conflict (task_id, blocker_task_id, relation_type)
+      do update set metadata = pitchai_symphony.task_dependencies.metadata || excluded.metadata
+      returning task_id
+    ),
+    removed_duplicate_dependencies as (
+      delete from pitchai_symphony.task_dependencies dep
+      where dep.blocker_task_id = $2::text::uuid
+      returning task_id
+    ),
+    current_duplicate as (
+      select id, state_name
+      from public.tasks
+      where id = $2::text::uuid
+    ),
+    updated_duplicate as (
+      update public.tasks t
+      set state_name = 'Duplicate',
+          updated_at = now()
+      from current_duplicate c
+      where t.id = c.id
+      returning t.id, c.state_name as from_state, t.state_name as to_state
+    ),
+    state_event as (
+      insert into pitchai_symphony.task_state_events(task_id, from_state, to_state, actor, reason, metadata)
+      select
+        id,
+        from_state,
+        to_state,
+        'symphony',
+        'blocker_reconciler_duplicate_merged',
+        jsonb_build_object(
+          'source', $3::text,
+          'canonical_blocker_task_id', $1::text,
+          'duplicate_blocker_task_id', $2::text
+        )
+      from updated_duplicate
+      where from_state is distinct from to_state
+      returning task_id
+    )
+    select 1
+    """
+
+    case query(sql, [canonical_task.id, duplicate_task.id, @blocker_reconciler_source]) do
+      {:ok, _result} -> :ok
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  defp link_blocked_tasks_to_blocker(group, blocker_task) do
+    task_ids =
+      group.tasks
+      |> Enum.map(&Map.get(&1, :id))
+      |> Enum.reject(&(&1 in [nil, blocker_task.id]))
+
+    if task_ids == [] do
+      {:ok, 0}
+    else
+      dependency_metadata = %{
+        "source" => @blocker_reconciler_source,
+        "blocker_key" => group.blocker_key,
+        "reason_summary" => group.summary
+      }
+
+      comment_metadata = %{
+        "source" => @blocker_reconciler_source,
+        "blocker_task_id" => blocker_task.id,
+        "blocker_key" => group.blocker_key
+      }
+
+      sql = """
+      with inserted_dependency as (
+        insert into pitchai_symphony.task_dependencies(task_id, blocker_task_id, relation_type, metadata)
+        select source.task_id::uuid, $2::text::uuid, 'blocked_by', $3::text::jsonb
+        from unnest($1::text[]) as source(task_id)
+        where source.task_id::uuid <> $2::text::uuid
+        on conflict (task_id, blocker_task_id, relation_type) do nothing
+        returning task_id
+      ),
+      inserted_comment as (
+        insert into pitchai_symphony.task_comments(task_id, body, author, kind, metadata)
+        select task_id, $4::text, 'symphony', 'blocker_link', $5::text::jsonb
+        from inserted_dependency
+        returning task_id
+      )
+      select count(*)::integer
+      from inserted_dependency
+      """
+
+      params = [
+        task_ids,
+        blocker_task.id,
+        Jason.encode!(dependency_metadata),
+        linked_blocker_comment_body(blocker_task, group),
+        Jason.encode!(comment_metadata)
+      ]
+
+      case query(sql, params) do
+        {:ok, %{rows: [[linked_count]]}} -> {:ok, linked_count}
+        {:error, reason} -> {:error, reason}
+      end
+    end
+  end
+
+  defp merge_blocker_reconcile_result(acc, result) do
+    acc
+    |> Map.update!(:created_blocker_tasks, &(&1 + result.created_blocker_tasks))
+    |> Map.update!(:reopened_blocker_tasks, &(&1 + result.reopened_blocker_tasks))
+    |> Map.update!(:merged_duplicate_blocker_tasks, &(&1 + result.merged_duplicate_blocker_tasks))
+    |> Map.update!(:linked_dependencies, &(&1 + result.linked_dependencies))
+    |> Map.update!(:blocker_task_ids, &Enum.uniq(&1 ++ result.blocker_task_ids))
+  end
+
+  defp blocker_title(group) do
+    group.summary
+    |> then(&"Unblock: #{&1}")
+    |> truncate_string(180)
+  end
+
+  defp blocker_description(group) do
+    %{
+      "request" =>
+        "Resolve this shared blocker so Symphony can resume the dependent PM tasks. If this duplicates another blocker task, keep one canonical blocker and keep dependencies linked to that canonical task.",
+      "summary" => group.summary,
+      "blocker_key" => group.blocker_key,
+      "blocked_task_count" => length(group.tasks),
+      "blocked_tasks" => group.tasks |> Enum.take(25) |> Enum.map(&BlockerReconciler.task_descriptor/1),
+      "reason_samples" => group.reason_samples,
+      "orchestration" => %{
+        "source" => @blocker_reconciler_source,
+        "symphony_kind" => "blocker_task"
+      }
+    }
+  end
+
+  defp blocker_tracking_metadata(group) do
+    %{
+      "managed_by" => "pitchai_symphony",
+      "source" => @blocker_reconciler_source,
+      "symphony_kind" => "blocker_task",
+      "blocker_key" => group.blocker_key,
+      "blocked_task_count" => length(group.tasks),
+      "reason_samples" => group.reason_samples
+    }
+  end
+
+  defp blocker_task_comment_body(group) do
+    """
+    Auto-created blocker task.
+
+    Blocker key: #{group.blocker_key}
+    Impact: #{length(group.tasks)} blocked downstream task(s)
+    Summary: #{group.summary}
+
+    Dependent tasks:
+    #{blocked_task_comment_lines(group.tasks)}
+    """
+    |> String.trim()
+  end
+
+  defp linked_blocker_comment_body(blocker_task, group) do
+    "Linked to blocker task #{blocker_task.identifier}: #{group.summary}"
+  end
+
+  defp blocked_task_comment_lines(tasks) do
+    tasks
+    |> Enum.take(20)
+    |> Enum.map_join("\n", fn task -> "- #{Map.get(task, :identifier)}: #{Map.get(task, :title)}" end)
+  end
+
+  defp blocked_task_row_to_map(columns, row) do
+    data = columns |> Enum.zip(row) |> Map.new()
+
+    %{
+      id: data["id"],
+      identifier: data["identifier"],
+      title: data["title"],
+      project_id: data["project_id"],
+      project_name: clean_string(data["project_name"]),
+      repo_full_name: clean_string(data["repo_full_name"]),
+      workspace_path: clean_string(data["workspace_path"]),
+      labels: labels(data["labels"]),
+      blocked_reason: clean_string(data["blocked_reason"]),
+      workpad_body: clean_string(data["workpad_body"])
+    }
   end
 
   @spec update_issue_state(String.t(), String.t()) :: :ok | {:error, term()}
@@ -695,7 +1193,8 @@ defmodule SymphonyElixir.PitchAIPM.Client do
       comment_count,
       blocked_reason,
       pr_count,
-      workpad_updated_at
+      workpad_updated_at,
+      downstream_count
     from (
       select
         t.id::text as id,
@@ -724,6 +1223,26 @@ defmodule SymphonyElixir.PitchAIPM.Client do
         ) as blocked_reason,
         coalesce((select count(*)::integer from pitchai_symphony.task_pr_links pr where pr.task_id = t.id), 0) as pr_count,
         (select max(w.updated_at) from pitchai_symphony.task_workpads w where w.task_id = t.id) as workpad_updated_at,
+        coalesce(
+          (
+            with recursive downstream(dependent_id) as (
+              select dep.task_id
+              from pitchai_symphony.task_dependencies dep
+              where dep.blocker_task_id = t.id
+                and dep.relation_type = 'blocked_by'
+              union
+              select dep.task_id
+              from downstream d
+              join pitchai_symphony.task_dependencies dep
+                on dep.blocker_task_id = d.dependent_id
+               and dep.relation_type = 'blocked_by'
+            )
+            select count(distinct dependent_id)::integer
+            from downstream
+            where dependent_id <> t.id
+          ),
+          0
+        ) as downstream_count,
         row_number() over (
           partition by lower(trim(coalesce(t.state_name, '')))
           order by t.rank asc nulls last, coalesce(tr.priority, 5), t.updated_at desc nulls last, t.created_at desc nulls last, t.name
@@ -901,7 +1420,7 @@ defmodule SymphonyElixir.PitchAIPM.Client do
 
       sql = """
       insert into pitchai_symphony.task_pr_links(task_id, url, repo_full_name, branch_name, state, metadata)
-      values ($1::text::uuid, $2::text, $3::text, $4::text, $5::text, $6::jsonb)
+      values ($1::text::uuid, $2::text, $3::text, $4::text, $5::text, $6::text::jsonb)
       on conflict (task_id, url)
       do update set
         repo_full_name = excluded.repo_full_name,
@@ -934,7 +1453,7 @@ defmodule SymphonyElixir.PitchAIPM.Client do
 
       sql = """
       insert into public.tasks(id, created_at, updated_at, name, description, project_id, state_name, value_name, is_bug)
-      values (gen_random_uuid(), now(), now(), $1::text, $2::jsonb, $3::text::uuid, $4::text, $5::text, false)
+      values (gen_random_uuid(), now(), now(), $1::text, $2::text::jsonb, $3::text::uuid, $4::text, $5::text, false)
       returning id::text
       """
 
@@ -1122,7 +1641,8 @@ defmodule SymphonyElixir.PitchAIPM.Client do
       comment_count: data["comment_count"] || 0,
       blocked_reason: clean_string(data["blocked_reason"]),
       pr_count: data["pr_count"] || 0,
-      workpad_updated_at: encode_datetime(data["workpad_updated_at"])
+      workpad_updated_at: encode_datetime(data["workpad_updated_at"]),
+      downstream_count: data["downstream_count"] || 0
     }
   end
 
@@ -1385,6 +1905,11 @@ defmodule SymphonyElixir.PitchAIPM.Client do
     ["todo", "symphony ready", "in progress", "human review", "blocked", "merging", "rework"]
   end
 
+  defp terminal_state_keys do
+    Config.settings!().tracker.terminal_states
+    |> normalize_states()
+  end
+
   defp poll_limit(settings) do
     case settings.poll_limit do
       limit when is_integer(limit) and limit > 0 -> min(limit, 1_000)
@@ -1457,6 +1982,15 @@ defmodule SymphonyElixir.PitchAIPM.Client do
 
   defp clean_string(nil), do: nil
   defp clean_string(value), do: value |> to_string() |> clean_string()
+
+  defp truncate_string(value, limit) when is_binary(value) and byte_size(value) <= limit, do: value
+
+  defp truncate_string(value, limit) when is_binary(value) do
+    value
+    |> binary_part(0, limit)
+    |> String.replace(~r/\s+\S*$/, "")
+    |> Kernel.<>("...")
+  end
 
   defp encode_datetime(%DateTime{} = value), do: DateTime.to_iso8601(value)
   defp encode_datetime(%NaiveDateTime{} = value), do: NaiveDateTime.to_iso8601(value)

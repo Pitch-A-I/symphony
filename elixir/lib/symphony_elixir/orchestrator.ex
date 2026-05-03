@@ -9,6 +9,7 @@ defmodule SymphonyElixir.Orchestrator do
 
   alias SymphonyElixir.{AgentRunner, Config, StatusDashboard, Tracker, Workspace}
   alias SymphonyElixir.Linear.Issue
+  alias SymphonyElixir.PitchAIPM.Client, as: PitchAIPMClient
 
   @continuation_retry_delay_ms 1_000
   @failure_retry_base_ms 10_000
@@ -225,6 +226,7 @@ defmodule SymphonyElixir.Orchestrator do
     state = reconcile_running_issues(state)
 
     with :ok <- Config.validate!(),
+         :ok <- reconcile_pitchai_pm_blockers(),
          {:ok, issues} <- Tracker.fetch_candidate_issues(),
          true <- available_slots(state) > 0 do
       choose_issues(issues, state)
@@ -243,6 +245,10 @@ defmodule SymphonyElixir.Orchestrator do
 
       {:error, :missing_pitchai_pm_database_url} ->
         Logger.error("PitchAI PM database URL missing; set tracker.database_url or PITCHAI_PM_DATABASE_URL")
+        state
+
+      {:error, {:pitchai_pm_blocker_reconcile_failed, reason}} ->
+        Logger.error("Failed to reconcile PitchAI PM blockers: #{inspect(reason)}")
         state
 
       {:error, :missing_tracker_kind} ->
@@ -277,6 +283,38 @@ defmodule SymphonyElixir.Orchestrator do
 
       false ->
         state
+    end
+  end
+
+  defp reconcile_pitchai_pm_blockers do
+    case Config.settings!().tracker.kind do
+      "pitchai_pm" ->
+        case pitchai_pm_client().reconcile_blocked_tasks() do
+          {:ok, result} ->
+            log_blocker_reconcile_result(result)
+            :ok
+
+          {:error, reason} ->
+            {:error, {:pitchai_pm_blocker_reconcile_failed, reason}}
+        end
+
+      _other_tracker ->
+        :ok
+    end
+  end
+
+  defp pitchai_pm_client do
+    Application.get_env(:symphony_elixir, :pitchai_pm_client_module, PitchAIPMClient)
+  end
+
+  defp log_blocker_reconcile_result(result) when is_map(result) do
+    if Map.get(result, :created_blocker_tasks, 0) > 0 or
+         Map.get(result, :reopened_blocker_tasks, 0) > 0 or
+         Map.get(result, :merged_duplicate_blocker_tasks, 0) > 0 or
+         Map.get(result, :linked_dependencies, 0) > 0 do
+      Logger.info(
+        "Reconciled PitchAI PM blockers: groups=#{Map.get(result, :groups, 0)} blocked_tasks=#{Map.get(result, :blocked_tasks, 0)} created=#{Map.get(result, :created_blocker_tasks, 0)} reopened=#{Map.get(result, :reopened_blocker_tasks, 0)} duplicates=#{Map.get(result, :merged_duplicate_blocker_tasks, 0)} linked=#{Map.get(result, :linked_dependencies, 0)}"
+      )
     end
   end
 

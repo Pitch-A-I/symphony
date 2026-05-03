@@ -261,6 +261,13 @@ defmodule SymphonyElixirWeb.BoardLive do
                       </span>
                       <span :if={task.pr_count > 0} class="soft-badge">PR</span>
                       <span :if={task.comment_count > 0} class="soft-badge"><%= task.comment_count %> comments</span>
+                      <span
+                        :if={dependency_descendant_label(task)}
+                        class="dependency-badge"
+                        title={dependency_descendant_title(task)}
+                      >
+                        <%= dependency_descendant_label(task) %>
+                      </span>
                       <span :for={label <- Enum.take(visible_labels(task.labels), 2)} class="soft-badge"><%= label %></span>
                     </div>
 
@@ -576,7 +583,9 @@ defmodule SymphonyElixirWeb.BoardLive do
   defp visible_runtime_badge(_runtime_status), do: nil
 
   defp visible_labels(labels) when is_list(labels) do
-    Enum.reject(labels, &(String.downcase(to_string(&1)) == "symphony"))
+    hidden_labels = MapSet.new(["auto-blocker", "blocker", "symphony"])
+
+    Enum.reject(labels, &(String.downcase(to_string(&1)) in hidden_labels))
   end
 
   defp visible_labels(_labels), do: []
@@ -792,6 +801,36 @@ defmodule SymphonyElixirWeb.BoardLive do
   end
 
   defp blocked_reason(_task), do: nil
+
+  defp dependency_descendant_label(task) when is_map(task) do
+    case downstream_dependency_count(task) do
+      count when count > 0 -> "#{count} downstream"
+      _count -> nil
+    end
+  end
+
+  defp dependency_descendant_label(_task), do: nil
+
+  defp dependency_descendant_title(task) when is_map(task) do
+    "#{downstream_dependency_count(task)} downstream dependent tickets are blocked by this ticket or its descendants."
+  end
+
+  defp dependency_descendant_title(_task), do: nil
+
+  defp downstream_dependency_count(task) when is_map(task) do
+    case Map.get(task, :downstream_count) || Map.get(task, "downstream_count") do
+      count when is_integer(count) -> count
+      count when is_binary(count) -> parse_positive_integer(count)
+      _count -> 0
+    end
+  end
+
+  defp parse_positive_integer(value) do
+    case Integer.parse(value) do
+      {integer, ""} when integer > 0 -> integer
+      _invalid -> 0
+    end
+  end
 
   defp visible_workpad_sections(%{workpad_sections: sections} = task) when is_list(sections) do
     Enum.reject(sections, &empty_optional_blockers_section?(&1, task))
