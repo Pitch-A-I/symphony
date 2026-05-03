@@ -89,23 +89,29 @@ branch_exists() {
   local_branch_ref_exists "$branch" || remote_branch_exists "$branch"
 }
 
+normalize_workspace_branch() {
+  branch="$(printf '%s' "${1:-}" | tr '[:upper:]' '[:lower:]')"
+  case "$branch" in
+    "" | main | master) printf '%s\n' "staging" ;;
+    *) printf '%s\n' "$1" ;;
+  esac
+}
+
 checkout_branch() {
   preferred_branch="$1"
   default_branch="$2"
 
   target_branch=""
+  preferred_branch="$(normalize_workspace_branch "$preferred_branch")"
+  default_branch="$(normalize_workspace_branch "$default_branch")"
 
   if [ -n "$preferred_branch" ] && branch_exists "$preferred_branch"; then
     target_branch="$preferred_branch"
-  elif [ -n "$default_branch" ] && branch_exists "$default_branch"; then
+  elif [ "$default_branch" != "$preferred_branch" ] && branch_exists "$default_branch"; then
     target_branch="$default_branch"
-  elif branch_exists main; then
-    target_branch="main"
-  elif branch_exists master; then
-    target_branch="master"
   fi
 
-  [ -n "$target_branch" ] || die "no checkout branch found on origin"
+  [ -n "$target_branch" ] || die "no checkout branch found on origin; expected staging"
 
   if git show-ref --verify --quiet "refs/remotes/origin/$target_branch"; then
     git checkout -B "$target_branch" "origin/$target_branch"

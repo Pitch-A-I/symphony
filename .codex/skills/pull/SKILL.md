@@ -1,7 +1,7 @@
 ---
 name: pull
 description:
-  Pull latest origin/main into the current local branch and resolve merge
+  Pull latest origin/staging into the current local branch and resolve merge
   conflicts (aka update-branch). Use when Codex needs to sync a feature branch
   with origin, perform a merge-based update (not rebase), and guide conflict
   resolution best practices.
@@ -23,9 +23,9 @@ description:
 5. Sync the remote feature branch first:
    - `git pull --ff-only origin $(git branch --show-current)`
    - This pulls branch updates made remotely (for example, a GitHub auto-commit)
-     before merging `origin/main`.
+     before merging `origin/staging`.
 6. Merge in order:
-   - Prefer `git -c merge.conflictstyle=zdiff3 merge origin/main` for clearer
+   - Prefer `git -c merge.conflictstyle=zdiff3 merge origin/staging` for clearer
      conflict context.
 7. If conflicts appear, resolve them (see conflict guidance below), then:
    - `git add <files>`

@@ -34,6 +34,8 @@ Tool input:
 ## Rules
 
 - Treat `public.tasks.state_name` as authoritative task state.
+- Always branch implementation work from `origin/staging` unless the task explicitly
+  names another base.
 - Use `pitchai_symphony.task_workpads` as the persistent execution checklist.
 - Use `pitchai_symphony.task_dependencies` for blocker relationships.
 - Append a changelog entry after completing user-visible or repository-changing work.
