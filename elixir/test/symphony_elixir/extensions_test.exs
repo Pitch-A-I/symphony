@@ -792,6 +792,9 @@ defmodule SymphonyElixir.ExtensionsTest do
     detail = render_click(view, "open_task", %{"task_id" => "issue-http"})
     assert detail =~ "Agent progress"
     assert detail =~ "Checklist"
+    refute detail =~ "detail-status-pill"
+    refute detail =~ "detail-chip\">Task"
+    assert detail =~ "detail-chip\">P3"
     refute detail =~ "detail-chip\">symphony"
     assert detail =~ "Render agent progress like the Symphony demo."
     assert detail =~ "Inspect the current board"

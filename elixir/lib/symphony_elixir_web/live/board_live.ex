@@ -262,14 +262,9 @@ defmodule SymphonyElixirWeb.BoardLive do
           <h1 id="task-detail-title" class="detail-title"><%= @task.title %></h1>
           <p :if={@task.description_text} class="detail-description"><%= @task.description_text %></p>
 
-          <div class="detail-inline-meta">
-            <span class={["detail-status-pill", detail_status_class(@task.runtime_status)]}>
-              <span class="state-spinner mini" :if={@task.runtime_status && @task.runtime_status.kind == "running"} aria-hidden="true"></span>
-              <%= @task.state || "No state" %>
-            </span>
-            <span :if={@task.value_name} class="detail-chip"><%= @task.value_name %></span>
-            <span :if={@task.priority} class="detail-chip">P<%= @task.priority %></span>
-            <span :for={label <- Enum.take(visible_labels(@task.labels), 4)} class="detail-chip"><%= label %></span>
+          <% detail_chips = detail_chips(@task) %>
+          <div :if={detail_chips != []} class="detail-inline-meta">
+            <span :for={chip <- detail_chips} class="detail-chip"><%= chip %></span>
           </div>
 
           <section class="agent-progress-panel" aria-label="Agent progress">
@@ -539,12 +534,19 @@ defmodule SymphonyElixirWeb.BoardLive do
   defp in_progress_task?(%{state: "In Progress"}, _column), do: true
   defp in_progress_task?(_task, _column), do: false
 
-  defp detail_status_class(%{kind: kind}), do: kind
-  defp detail_status_class(_status), do: nil
-
   defp agent_progress_subtitle(%{runtime_status: %{kind: "running"}}), do: "Codex app-server is actively working this task."
   defp agent_progress_subtitle(%{runtime_status: %{kind: "retrying"}}), do: "Work is queued for retry."
   defp agent_progress_subtitle(_task), do: "No live agent is attached right now."
+
+  defp detail_chips(task) when is_map(task) do
+    priority_chip =
+      case Map.get(task, :priority) do
+        priority when is_integer(priority) -> ["P#{priority}"]
+        _priority -> []
+      end
+
+    priority_chip ++ Enum.take(visible_labels(Map.get(task, :labels)), 4)
+  end
 
   defp runtime_value(nil, _key), do: nil
   defp runtime_value(runtime, key) when is_map(runtime), do: Map.get(runtime, key) || Map.get(runtime, to_string(key))

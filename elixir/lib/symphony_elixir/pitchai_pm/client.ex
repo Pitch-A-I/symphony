@@ -12,19 +12,134 @@ defmodule SymphonyElixir.PitchAIPM.Client do
   @query_timeout 15_000
 
   @board_default_states [
-    %{state_name: "Suggested", category: "queue", color: "#8b5cf6", sort_order: -10, is_active: false, is_terminal: false, is_visible_button: true},
-    %{state_name: "Todo", category: "queue", color: "#9ca3af", sort_order: 10, is_active: false, is_terminal: false, is_visible_button: true},
-    %{state_name: "In Progress", category: "active", color: "#facc15", sort_order: 30, is_active: false, is_terminal: false, is_visible_button: true},
-    %{state_name: "Human Review", category: "review", color: "#e85d8e", sort_order: 40, is_active: false, is_terminal: false, is_visible_button: true},
-    %{state_name: "Symphony Ready", category: "queue", color: "#2563eb", sort_order: 50, is_active: true, is_terminal: false, is_visible_button: true},
-    %{state_name: "Merging", category: "merge", color: "#059669", sort_order: 60, is_active: true, is_terminal: false, is_visible_button: false},
-    %{state_name: "Rework", category: "rework", color: "#dc2626", sort_order: 70, is_active: true, is_terminal: false, is_visible_button: false},
-    %{state_name: "Blocked", category: "blocked", color: "#64748b", sort_order: 80, is_active: false, is_terminal: false, is_visible_button: true},
-    %{state_name: "Done", category: "terminal", color: "#6366f1", sort_order: 100, is_active: false, is_terminal: true, is_visible_button: false},
-    %{state_name: "Cancelled", category: "terminal", color: "#94a3b8", sort_order: 110, is_active: false, is_terminal: true, is_visible_button: false},
-    %{state_name: "Canceled", category: "terminal", color: "#94a3b8", sort_order: 111, is_active: false, is_terminal: true, is_visible_button: false},
-    %{state_name: "Duplicate", category: "terminal", color: "#94a3b8", sort_order: 112, is_active: false, is_terminal: true, is_visible_button: false}
+    %{
+      state_name: "Suggested",
+      category: "queue",
+      color: "#8b5cf6",
+      sort_order: -10,
+      is_active: false,
+      is_terminal: false,
+      is_visible_button: true
+    },
+    %{
+      state_name: "Todo",
+      category: "queue",
+      color: "#9ca3af",
+      sort_order: 10,
+      is_active: false,
+      is_terminal: false,
+      is_visible_button: true
+    },
+    %{
+      state_name: "In Progress",
+      category: "active",
+      color: "#facc15",
+      sort_order: 30,
+      is_active: false,
+      is_terminal: false,
+      is_visible_button: true
+    },
+    %{
+      state_name: "Human Review",
+      category: "review",
+      color: "#e85d8e",
+      sort_order: 40,
+      is_active: false,
+      is_terminal: false,
+      is_visible_button: true
+    },
+    %{
+      state_name: "Symphony Ready",
+      category: "queue",
+      color: "#2563eb",
+      sort_order: 50,
+      is_active: true,
+      is_terminal: false,
+      is_visible_button: true
+    },
+    %{
+      state_name: "Merging",
+      category: "merge",
+      color: "#059669",
+      sort_order: 60,
+      is_active: true,
+      is_terminal: false,
+      is_visible_button: false
+    },
+    %{
+      state_name: "Rework",
+      category: "rework",
+      color: "#dc2626",
+      sort_order: 70,
+      is_active: true,
+      is_terminal: false,
+      is_visible_button: false
+    },
+    %{
+      state_name: "Blocked",
+      category: "blocked",
+      color: "#64748b",
+      sort_order: 80,
+      is_active: false,
+      is_terminal: false,
+      is_visible_button: true
+    },
+    %{
+      state_name: "Done",
+      category: "terminal",
+      color: "#6366f1",
+      sort_order: 100,
+      is_active: false,
+      is_terminal: true,
+      is_visible_button: false
+    },
+    %{
+      state_name: "Cancelled",
+      category: "terminal",
+      color: "#94a3b8",
+      sort_order: 110,
+      is_active: false,
+      is_terminal: true,
+      is_visible_button: false
+    },
+    %{
+      state_name: "Canceled",
+      category: "terminal",
+      color: "#94a3b8",
+      sort_order: 111,
+      is_active: false,
+      is_terminal: true,
+      is_visible_button: false
+    },
+    %{
+      state_name: "Duplicate",
+      category: "terminal",
+      color: "#94a3b8",
+      sort_order: 112,
+      is_active: false,
+      is_terminal: true,
+      is_visible_button: false
+    }
   ]
+
+  @state_sort_orders %{
+    "backlog" => 0,
+    "suggested" => -10,
+    "todo" => 10,
+    "in progress" => 30,
+    "human review" => 40,
+    "symphony ready" => 50,
+    "merging" => 60,
+    "rework" => 70,
+    "blocked" => 80,
+    "idea" => 90,
+    "open" => 100,
+    "done" => 100,
+    "enriched" => 110,
+    "cancelled" => 110,
+    "canceled" => 111,
+    "duplicate" => 112
+  }
 
   @task_select """
   select
@@ -123,14 +238,16 @@ defmodule SymphonyElixir.PitchAIPM.Client do
       {:error, :missing_pitchai_pm_project_id}
     else
       with {:ok, project} <- fetch_board_project(project_id),
-           {:ok, state_counts} <- fetch_board_state_counts(project_id),
+           {:ok, project_ids} <- fetch_board_scope_project_ids(project),
+           {:ok, state_counts} <- fetch_board_state_counts(project_ids),
            {:ok, workflow_states} <- fetch_board_workflow_states(project_id),
-           {:ok, tasks} <- fetch_board_tasks(project_id) do
+           {:ok, tasks} <- fetch_board_tasks(project_ids) do
         columns = build_board_columns(workflow_states, state_counts, tasks)
 
         {:ok,
          %{
            project: project,
+           scope: %{kind: "workspace_repo_projects", project_ids: project_ids},
            columns: Enum.reject(columns, & &1.hidden?),
            hidden_columns: Enum.filter(columns, & &1.hidden?),
            task_limit_per_column: @board_task_limit_per_state
@@ -352,18 +469,24 @@ defmodule SymphonyElixir.PitchAIPM.Client do
 
   @spec tool_operation(String.t(), map()) :: {:ok, map()} | {:error, term()}
   def tool_operation(operation, params) when is_binary(operation) and is_map(params) do
-    case String.trim(operation) do
-      "get_task" -> tool_get_task(params)
-      "list_tasks" -> tool_list_tasks(params)
-      "list_workflow_states" -> tool_list_workflow_states(params)
-      "update_task_state" -> tool_update_task_state(params)
-      "append_changelog" -> tool_append_changelog(params)
-      "get_workpad" -> tool_get_workpad(params)
-      "upsert_workpad" -> tool_upsert_workpad(params)
-      "add_comment" -> tool_add_comment(params)
-      "attach_pr" -> tool_attach_pr(params)
-      "create_task" -> tool_create_task(params)
-      other -> {:error, {:unsupported_pitchai_pm_operation, other}}
+    operation_handlers = %{
+      "get_task" => &tool_get_task/1,
+      "list_tasks" => &tool_list_tasks/1,
+      "list_workflow_states" => &tool_list_workflow_states/1,
+      "update_task_state" => &tool_update_task_state/1,
+      "append_changelog" => &tool_append_changelog/1,
+      "get_workpad" => &tool_get_workpad/1,
+      "upsert_workpad" => &tool_upsert_workpad/1,
+      "add_comment" => &tool_add_comment/1,
+      "attach_pr" => &tool_attach_pr/1,
+      "create_task" => &tool_create_task/1
+    }
+
+    normalized_operation = String.trim(operation)
+
+    case Map.fetch(operation_handlers, normalized_operation) do
+      {:ok, handler} -> handler.(params)
+      :error -> {:error, {:unsupported_pitchai_pm_operation, normalized_operation}}
     end
   end
 
@@ -407,28 +530,46 @@ defmodule SymphonyElixir.PitchAIPM.Client do
 
   defp fetch_board_project(project_id) do
     sql = """
-    select id::text, name
+    select id::text, name, workspace_id::text
     from public.projects
     where id = $1::text::uuid
     """
 
     case query(sql, [project_id]) do
-      {:ok, %{rows: [[id, name]]}} -> {:ok, %{id: id, name: name}}
+      {:ok, %{rows: [[id, name, workspace_id]]}} -> {:ok, %{id: id, name: name, workspace_id: workspace_id}}
       {:ok, %{rows: []}} -> {:error, :project_not_found}
       {:error, reason} -> {:error, reason}
     end
   end
 
-  defp fetch_board_state_counts(project_id) do
+  defp fetch_board_scope_project_ids(%{id: project_id, workspace_id: workspace_id})
+       when is_binary(project_id) and is_binary(workspace_id) do
+    sql = """
+    select distinct p.id::text
+    from public.projects p
+    left join pitchai_dispatch.project_git_repos gr on gr.project_id = p.id
+    where p.id = $1::text::uuid
+       or (p.workspace_id = $2::text::uuid and gr.project_id is not null)
+    order by p.id::text
+    """
+
+    with {:ok, result} <- query(sql, [project_id, workspace_id]) do
+      {:ok, Enum.map(result.rows, fn [id] -> id end)}
+    end
+  end
+
+  defp fetch_board_scope_project_ids(%{id: project_id}) when is_binary(project_id), do: {:ok, [project_id]}
+
+  defp fetch_board_state_counts(project_ids) when is_list(project_ids) do
     sql = """
     select trim(state_name) as state_name, count(*)::integer as task_count
     from public.tasks
-    where project_id = $1::text::uuid
+    where project_id::text = any($1::text[])
       and nullif(trim(coalesce(state_name, '')), '') is not null
     group by trim(state_name)
     """
 
-    with {:ok, result} <- query(sql, [project_id]) do
+    with {:ok, result} <- query(sql, [project_ids]) do
       {:ok,
        result.rows
        |> Enum.map(fn [state_name, task_count] -> {state_name, task_count} end)
@@ -459,7 +600,7 @@ defmodule SymphonyElixir.PitchAIPM.Client do
     end
   end
 
-  defp fetch_board_tasks(project_id) do
+  defp fetch_board_tasks(project_ids) when is_list(project_ids) do
     sql = """
     select
       id,
@@ -505,14 +646,14 @@ defmodule SymphonyElixir.PitchAIPM.Client do
       from public.tasks t
       left join public.projects p on p.id = t.project_id
       left join pitchai_symphony.task_tracking tr on tr.task_id = t.id
-      where t.project_id = $1::text::uuid
+      where t.project_id::text = any($1::text[])
         and nullif(trim(coalesce(t.state_name, '')), '') is not null
     ) ranked
     where board_rank <= $2
     order by lower(state), board_rank
     """
 
-    with {:ok, result} <- query(sql, [project_id, @board_task_limit_per_state]) do
+    with {:ok, result} <- query(sql, [project_ids, @board_task_limit_per_state]) do
       {:ok, Enum.map(result.rows, &board_task_row_to_map(result.columns, &1))}
     end
   end
@@ -962,16 +1103,20 @@ defmodule SymphonyElixir.PitchAIPM.Client do
     Enum.reduce(workflow_states, states, fn workflow_state, acc ->
       key = normalize_state_key(workflow_state.state_name)
 
-      Map.update(acc, key, workflow_state, fn default_state ->
-        Map.merge(default_state, workflow_state, fn _key, default_value, workflow_value ->
-          workflow_value || default_value
-        end)
-        |> Map.put(:sort_order, default_state.sort_order)
-        |> Map.put(:is_visible_button, default_state.is_visible_button)
-        |> Map.put(:category, default_state.category)
-      end)
+      Map.update(acc, key, workflow_state, &merge_workflow_state(&1, workflow_state))
     end)
   end
+
+  defp merge_workflow_state(default_state, workflow_state) do
+    default_state
+    |> Map.merge(workflow_state, &prefer_workflow_value/3)
+    |> Map.put(:sort_order, default_state.sort_order)
+    |> Map.put(:is_visible_button, default_state.is_visible_button)
+    |> Map.put(:category, default_state.category)
+  end
+
+  defp prefer_workflow_value(_key, default_value, nil), do: default_value
+  defp prefer_workflow_value(_key, _default_value, workflow_value), do: workflow_value
 
   defp merge_task_states(states, state_names) do
     Enum.reduce(state_names, states, fn state_name, acc ->
@@ -1096,22 +1241,7 @@ defmodule SymphonyElixir.PitchAIPM.Client do
   end
 
   defp inferred_state_sort_order(state_name) do
-    case normalize_state_key(state_name) do
-      "backlog" -> 0
-      "suggested" -> -10
-      "todo" -> 10
-      "in progress" -> 30
-      "human review" -> 40
-      "symphony ready" -> 50
-      "merging" -> 60
-      "rework" -> 70
-      "blocked" -> 80
-      "done" -> 100
-      "cancelled" -> 110
-      "canceled" -> 111
-      "duplicate" -> 112
-      _ -> 500
-    end
+    Map.get(@state_sort_orders, normalize_state_key(state_name), 500)
   end
 
   defp decode_blockers(value) when is_binary(value) do
