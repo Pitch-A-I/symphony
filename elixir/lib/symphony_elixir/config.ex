@@ -115,25 +115,38 @@ defmodule SymphonyElixir.Config do
   end
 
   defp validate_semantics(settings) do
-    cond do
-      is_nil(settings.tracker.kind) ->
+    case settings.tracker.kind do
+      nil ->
         {:error, :missing_tracker_kind}
 
-      settings.tracker.kind not in ["linear", "memory", "pitchai_pm"] ->
-        {:error, {:unsupported_tracker_kind, settings.tracker.kind}}
+      "linear" ->
+        validate_linear_tracker(settings.tracker)
 
-      settings.tracker.kind == "linear" and not is_binary(settings.tracker.api_key) ->
-        {:error, :missing_linear_api_token}
+      "memory" ->
+        :ok
 
-      settings.tracker.kind == "linear" and not is_binary(settings.tracker.project_slug) ->
-        {:error, :missing_linear_project_slug}
+      "pitchai_pm" ->
+        validate_pitchai_pm_tracker(settings.tracker)
 
-      settings.tracker.kind == "pitchai_pm" and not is_binary(settings.tracker.project_id) ->
+      kind ->
+        {:error, {:unsupported_tracker_kind, kind}}
+    end
+  end
+
+  defp validate_linear_tracker(tracker) do
+    cond do
+      not is_binary(tracker.api_key) -> {:error, :missing_linear_api_token}
+      not is_binary(tracker.project_slug) -> {:error, :missing_linear_project_slug}
+      true -> :ok
+    end
+  end
+
+  defp validate_pitchai_pm_tracker(tracker) do
+    cond do
+      not is_binary(tracker.project_id) ->
         {:error, :missing_pitchai_pm_project_id}
 
-      settings.tracker.kind == "pitchai_pm" and
-        not is_binary(settings.tracker.database_url) and
-          not is_binary(System.get_env("PITCHAI_PM_DATABASE_URL")) ->
+      not is_binary(tracker.database_url) and not is_binary(System.get_env("PITCHAI_PM_DATABASE_URL")) ->
         {:error, :missing_pitchai_pm_database_url}
 
       true ->

@@ -7,7 +7,7 @@ defmodule SymphonyElixir.PitchAIPM.Client do
   alias SymphonyElixir.Linear.Issue
 
   @default_limit 100
-  @board_task_limit_per_state 12
+  @board_task_limit_per_state 1_000
   @connect_timeout 5_000
   @query_timeout 15_000
 
@@ -244,16 +244,15 @@ defmodule SymphonyElixir.PitchAIPM.Client do
       with {:ok, project} <- fetch_board_project(project_id),
            {:ok, projects} <- fetch_board_scope_projects(project),
            scope_project_ids = Enum.map(projects, & &1.id),
-           managed_assignee = Config.settings!().tracker.assignee |> clean_string(),
-           {:ok, state_counts} <- fetch_board_state_counts(project_id, scope_project_ids, managed_assignee),
+           {:ok, state_counts} <- fetch_board_state_counts(project_id, scope_project_ids),
            {:ok, workflow_states} <- fetch_board_workflow_states(project_id),
-           {:ok, tasks} <- fetch_board_tasks(project_id, scope_project_ids, managed_assignee) do
+           {:ok, tasks} <- fetch_board_tasks(project_id, scope_project_ids) do
         columns = build_board_columns(workflow_states, state_counts, tasks)
 
         {:ok,
          %{
            project: project,
-           scope: %{kind: "configured_project_plus_workspace_suggested_and_promoted", project_ids: scope_project_ids},
+           scope: %{kind: "configured_project_plus_repo_scope_all_tasks", project_ids: scope_project_ids},
            project_options: projects,
            columns: Enum.reject(columns, & &1.hidden?),
            hidden_columns: Enum.filter(columns, & &1.hidden?),
@@ -532,29 +531,21 @@ defmodule SymphonyElixir.PitchAIPM.Client do
         sql =
           @task_select <>
             """
-            where lower(trim(coalesce(t.state_name, ''))) = any($2::text[])
+            where t.project_id::text = any($1::text[])
+              and lower(trim(coalesce(t.state_name, ''))) = any($2::text[])
               and (
-                t.project_id = $1::text::uuid
-                or (
-                  t.project_id::text = any($3::text[])
-                  and t.project_id <> $1::text::uuid
-                  and $4::text is not null
-                  and tr.assignee = $4::text
-                )
-              )
-              and (
-                $4::text is null
-                or not (lower(trim(coalesce(t.state_name, ''))) = any($5::text[]))
-                or tr.assignee = $4::text
+                $3::text is null
+                or not (lower(trim(coalesce(t.state_name, ''))) = any($4::text[]))
+                or tr.assignee = $3::text
               )
             """ <>
             @task_group <>
             """
             order by coalesce(tr.priority, 5), t.created_at nulls last, t.name
-            limit $6
+            limit $5
             """
 
-        params = [project_id, normalized_states, scope_project_ids, assignee, assignee_required_states, limit]
+        params = [scope_project_ids, normalized_states, assignee, assignee_required_states, limit]
 
         with {:ok, result} <- query(sql, params) do
           {:ok, Enum.map(result.rows, &row_to_issue(result.columns, &1))}
@@ -634,7 +625,7 @@ defmodule SymphonyElixir.PitchAIPM.Client do
   defp fetch_board_scope_projects(%{id: project_id, name: name}) when is_binary(project_id),
     do: {:ok, [%{id: project_id, name: name}]}
 
-  defp fetch_board_state_counts(project_id, scope_project_ids, managed_assignee) when is_list(scope_project_ids) do
+  defp fetch_board_state_counts(project_id, scope_project_ids) when is_list(scope_project_ids) do
     sql = """
     select trim(state_name) as state_name, count(*)::integer as task_count
     from public.tasks t
@@ -644,7 +635,7 @@ defmodule SymphonyElixir.PitchAIPM.Client do
     group by trim(state_name)
     """
 
-    with {:ok, result} <- query(sql, [project_id, scope_project_ids, managed_assignee]) do
+    with {:ok, result} <- query(sql, [project_id, scope_project_ids]) do
       {:ok,
        result.rows
        |> Enum.map(fn [state_name, task_count] -> {state_name, task_count} end)
@@ -655,18 +646,8 @@ defmodule SymphonyElixir.PitchAIPM.Client do
   defp board_visible_task_condition_sql do
     """
     (
-        t.project_id = $1::text::uuid
-        or (
-          t.project_id::text = any($2::text[])
-          and t.project_id <> $1::text::uuid
-          and (
-            lower(trim(coalesce(t.state_name, ''))) = 'suggested'
-            or (
-              $3::text is not null
-              and tr.assignee = $3::text
-            )
-          )
-        )
+        $1::text is not null
+        and t.project_id::text = any($2::text[])
       )
     """
   end
@@ -694,7 +675,7 @@ defmodule SymphonyElixir.PitchAIPM.Client do
     end
   end
 
-  defp fetch_board_tasks(project_id, scope_project_ids, managed_assignee) when is_list(scope_project_ids) do
+  defp fetch_board_tasks(project_id, scope_project_ids) when is_list(scope_project_ids) do
     sql = """
     select
       id,
@@ -743,11 +724,11 @@ defmodule SymphonyElixir.PitchAIPM.Client do
       where #{board_visible_task_condition_sql()}
         and nullif(trim(coalesce(t.state_name, '')), '') is not null
     ) ranked
-    where board_rank <= $4
+    where board_rank <= $3
     order by lower(state), board_rank
     """
 
-    with {:ok, result} <- query(sql, [project_id, scope_project_ids, managed_assignee, @board_task_limit_per_state]) do
+    with {:ok, result} <- query(sql, [project_id, scope_project_ids, @board_task_limit_per_state]) do
       {:ok, Enum.map(result.rows, &board_task_row_to_map(result.columns, &1))}
     end
   end
@@ -1262,8 +1243,8 @@ defmodule SymphonyElixir.PitchAIPM.Client do
     from public.tasks t
     left join pitchai_symphony.task_tracking tr on tr.task_id = t.id
     where #{board_visible_task_condition_sql()}
-      and lower(trim(coalesce(t.state_name, ''))) = lower(trim($4::text))
-      and t.id <> $5::text::uuid
+      and lower(trim(coalesce(t.state_name, ''))) = lower(trim($3::text))
+      and t.id <> $4::text::uuid
     order by t.rank asc nulls last,
       coalesce(tr.priority, 5),
       t.updated_at desc nulls last,
@@ -1279,7 +1260,6 @@ defmodule SymphonyElixir.PitchAIPM.Client do
            query(sql, [
              settings.project_id,
              Enum.map(projects, & &1.id),
-             clean_string(settings.assignee),
              target_state,
              moved_task_id
            ]) do

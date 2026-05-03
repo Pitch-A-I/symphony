@@ -142,9 +142,10 @@ defmodule SymphonyElixirWeb.Presenter do
     end
   end
 
-  @spec move_board_task(String.t(), String.t(), map()) :: :ok | {:error, term()}
-  def move_board_task(task_id, state_name, opts \\ %{})
+  @spec move_board_task(String.t(), String.t()) :: :ok | {:error, term()}
+  def move_board_task(task_id, state_name), do: move_board_task(task_id, state_name, %{})
 
+  @spec move_board_task(String.t(), String.t(), map()) :: :ok | {:error, term()}
   def move_board_task(task_id, state_name, opts)
       when is_binary(task_id) and is_binary(state_name) and is_map(opts) do
     case Config.settings!().tracker.kind do
