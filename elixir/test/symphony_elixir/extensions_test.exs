@@ -140,6 +140,34 @@ defmodule SymphonyElixir.ExtensionsTest do
              ]
            },
            %{
+             state_name: "Blocked",
+             color: "#64748b",
+             task_count: 1,
+             hidden?: false,
+             tasks: [
+               %{
+                 id: "issue-blocked",
+                 identifier: "MT-BLOCK",
+                 title: "Blocked source checkout task",
+                 state: "Blocked",
+                 value_name: "Task",
+                 project_name: "TODO App",
+                 assignee: "symphony",
+                 priority: 2,
+                 rank: 1024.0,
+                 labels: [],
+                 branch_name: nil,
+                 url: "",
+                 updated_at: "2026-05-02T13:00:00Z",
+                 created_at: "2026-05-01T13:00:00Z",
+                 comment_count: 1,
+                 blocked_reason: "No application source files are present in the provided workspace.",
+                 pr_count: 0,
+                 workpad_updated_at: "2026-05-02T13:00:00Z"
+               }
+             ]
+           },
+           %{
              state_name: "Human Review",
              color: "#e85d8e",
              task_count: 0,
@@ -215,6 +243,70 @@ defmodule SymphonyElixir.ExtensionsTest do
          blockers: [],
          created_at: "2026-05-01T12:00:00Z",
          updated_at: "2026-05-02T12:00:00Z"
+       }}
+    end
+
+    def task_detail("issue-blocked") do
+      {:ok,
+       %{
+         id: "issue-blocked",
+         identifier: "MT-BLOCK",
+         title: "Blocked source checkout task",
+         description: %{"request" => "Fix the task once a source checkout exists."},
+         state: "Blocked",
+         value_name: "Task",
+         rank: 1024.0,
+         priority: 2,
+         labels: ["symphony"],
+         branch_name: nil,
+         url: "",
+         assignee: "symphony",
+         repo_full_name: "pitchai/dispatch",
+         repo_url: "https://example.invalid/pitchai/dispatch",
+         workspace_path: "/tmp/workspaces/MT-BLOCK",
+         tracking_metadata: %{},
+         project: %{id: "project-pm", name: "TODO App"},
+         workpad: %{
+           body: """
+           ## Codex Workpad
+
+           ### Plan
+
+           - [x] 1. Inspect workspace
+
+           ### Blockers
+
+           - True blocker: no application source files are present in the provided workspace.
+           """,
+           updated_at: "2026-05-02T13:00:00Z"
+         },
+         comments: [
+           %{
+             "body" => "Workspace was bootstrapped after the blocker was recorded.",
+             "author" => "symphony",
+             "kind" => "comment",
+             "created_at" => "2026-05-02T13:05:00Z"
+           },
+           %{
+             "body" => "Blocked in unattended Symphony session: no application source files are present in the provided workspace.",
+             "author" => "symphony",
+             "kind" => "comment",
+             "created_at" => "2026-05-02T13:00:00Z"
+           }
+         ],
+         prs: [],
+         state_events: [
+           %{
+             "from_state" => "In Progress",
+             "to_state" => "Blocked",
+             "actor" => "symphony",
+             "reason" => "tool_update_task_state",
+             "created_at" => "2026-05-02T13:00:00Z"
+           }
+         ],
+         blockers: [],
+         created_at: "2026-05-01T13:00:00Z",
+         updated_at: "2026-05-02T13:00:00Z"
        }}
     end
 
@@ -739,16 +831,23 @@ defmodule SymphonyElixir.ExtensionsTest do
 
     html = html_response(get(build_conn(), "/"), 200)
     assert html =~ "/dashboard.css"
+    assert html =~ "Hooks.ModalScrollLock"
     assert html =~ "/vendor/phoenix_html/phoenix_html.js"
     assert html =~ "/vendor/phoenix/phoenix.js"
     assert html =~ "/vendor/phoenix_live_view/phoenix_live_view.js"
     refute html =~ "/assets/app.js"
     refute html =~ "<style>"
 
-    dashboard_css = response(get(build_conn(), "/dashboard.css"), 200)
+    dashboard_css_conn = get(build_conn(), "/dashboard.css")
+    assert Plug.Conn.get_resp_header(dashboard_css_conn, "cache-control") == ["no-store"]
+
+    dashboard_css = response(dashboard_css_conn, 200)
     assert dashboard_css =~ ":root {"
+    assert dashboard_css =~ "body.has-modal-open"
     assert dashboard_css =~ ".board-columns"
     assert dashboard_css =~ ".ticket-card"
+    assert dashboard_css =~ ".ticket-blocked-reason"
+    assert dashboard_css =~ ".blocked-reason-panel"
     assert dashboard_css =~ ".state-spinner"
     assert dashboard_css =~ ".drag-placeholder"
     assert dashboard_css =~ ".is-drag-origin-card"
@@ -811,6 +910,9 @@ defmodule SymphonyElixir.ExtensionsTest do
     assert html =~ "In Progress"
     assert html =~ "Human Review"
     assert html =~ "TODO App"
+    assert html =~ "MT-BLOCK"
+    assert html =~ "ticket-blocked-reason"
+    assert html =~ "No application source files are present in the provided workspace."
     refute html =~ "Hidden columns"
     refute html =~ "Rework"
     refute html =~ "Merging"
@@ -863,6 +965,8 @@ defmodule SymphonyElixir.ExtensionsTest do
     assert hidden_html =~ "Done"
 
     detail = render_click(view, "open_task", %{"task_id" => "issue-http"})
+    assert detail =~ "phx-hook=\"ModalScrollLock\""
+    assert detail =~ "tabindex=\"-1\""
     assert detail =~ "Agent progress"
     assert detail =~ "Checklist"
     refute detail =~ "detail-status-pill"
@@ -874,6 +978,12 @@ defmodule SymphonyElixir.ExtensionsTest do
     assert detail =~ "Render nested checkboxes"
     assert detail =~ "Acceptance Criteria"
     assert detail =~ "State history"
+
+    blocked_detail = render_click(view, "open_task", %{"task_id" => "issue-blocked"})
+    assert blocked_detail =~ "blocked-reason-panel"
+    assert blocked_detail =~ "Blocked in unattended Symphony session"
+    refute blocked_detail =~ "Workspace was bootstrapped"
+    assert blocked_detail =~ "Blockers"
 
     Application.put_env(:symphony_elixir, :pitchai_pm_test_recipient, self())
     render_hook(view, "move_task", %{"task_id" => "issue-todo", "target_state" => "Human Review"})
@@ -1007,6 +1117,7 @@ defmodule SymphonyElixir.ExtensionsTest do
 
     dashboard_css = Req.get!("http://127.0.0.1:#{port}/dashboard.css")
     assert dashboard_css.status == 200
+    assert ["no-store"] = Req.Response.get_header(dashboard_css, "cache-control")
     assert dashboard_css.body =~ ":root {"
 
     phoenix_js = Req.get!("http://127.0.0.1:#{port}/vendor/phoenix/phoenix.js")

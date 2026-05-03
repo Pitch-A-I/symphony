@@ -30,6 +30,43 @@ defmodule SymphonyElixirWeb.Layouts do
 
             var Hooks = {};
 
+            Hooks.ModalScrollLock = {
+              mounted: function () {
+                this.scrollY = window.scrollY || window.pageYOffset || 0;
+                this.previousBodyPosition = document.body.style.position;
+                this.previousBodyTop = document.body.style.top;
+                this.previousBodyWidth = document.body.style.width;
+                this.previousBodyOverflow = document.body.style.overflow;
+                this.handleWheel = this.handleWheel.bind(this);
+                this.el.addEventListener("wheel", this.handleWheel, {passive: false});
+
+                document.body.classList.add("has-modal-open");
+                document.body.style.position = "fixed";
+                document.body.style.top = "-" + this.scrollY + "px";
+                document.body.style.width = "100%";
+                document.body.style.overflow = "hidden";
+
+                var modal = this.el.querySelector(".detail-modal, .create-modal");
+                if (modal) modal.focus({preventScroll: true});
+              },
+
+              destroyed: function () {
+                this.el.removeEventListener("wheel", this.handleWheel);
+                document.body.classList.remove("has-modal-open");
+                document.body.style.position = this.previousBodyPosition || "";
+                document.body.style.top = this.previousBodyTop || "";
+                document.body.style.width = this.previousBodyWidth || "";
+                document.body.style.overflow = this.previousBodyOverflow || "";
+                window.scrollTo(0, this.scrollY || 0);
+              },
+
+              handleWheel: function (event) {
+                if (!event.target.closest(".detail-modal, .create-modal")) {
+                  event.preventDefault();
+                }
+              }
+            };
+
             Hooks.KanbanBoard = {
               mounted: function () {
                 this.handlePointerDown = this.handlePointerDown.bind(this);

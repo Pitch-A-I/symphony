@@ -4,6 +4,7 @@ defmodule SymphonyElixir.WorkspaceAndConfigTest do
   alias SymphonyElixir.Config.Schema
   alias SymphonyElixir.Config.Schema.{Codex, StringOrMap}
   alias SymphonyElixir.Linear.Client
+  alias SymphonyElixir.Linear.Issue
 
   test "workspace bootstrap can be implemented in after_create hook" do
     test_root =
@@ -35,6 +36,32 @@ defmodule SymphonyElixir.WorkspaceAndConfigTest do
       assert File.exists?(Path.join(workspace, ".git"))
       assert File.read!(Path.join(workspace, "README.md")) == "hook clone\n"
       assert File.read!(Path.join([workspace, "keep", "file.txt"])) == "keep me"
+    after
+      File.rm_rf(test_root)
+    end
+  end
+
+  test "workspace hooks receive issue and workspace environment" do
+    test_root =
+      Path.join(
+        System.tmp_dir!(),
+        "symphony-elixir-workspace-hook-env-#{System.unique_integer([:positive])}"
+      )
+
+    try do
+      workspace_root = Path.join(test_root, "workspaces")
+
+      write_workflow_file!(Workflow.workflow_file_path(),
+        workspace_root: workspace_root,
+        hook_after_create: "printf '%s\\n%s\\n%s\\n%s\\n' \"$SYMPHONY_ISSUE_ID\" \"$SYMPHONY_ISSUE_IDENTIFIER\" \"$SYMPHONY_WORKSPACE\" \"$SYMPHONY_HOOK_NAME\" > hook-env.txt"
+      )
+
+      issue = %Issue{id: "task-123", identifier: "PM-123", title: "Hook env", state: "Todo"}
+
+      assert {:ok, workspace} = Workspace.create_for_issue(issue)
+
+      assert File.read!(Path.join(workspace, "hook-env.txt")) ==
+               "task-123\nPM-123\n#{workspace}\nafter_create\n"
     after
       File.rm_rf(test_root)
     end

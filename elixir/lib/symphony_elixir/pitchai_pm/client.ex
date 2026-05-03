@@ -693,6 +693,7 @@ defmodule SymphonyElixir.PitchAIPM.Client do
       created_at,
       updated_at,
       comment_count,
+      blocked_reason,
       pr_count,
       workpad_updated_at
     from (
@@ -712,6 +713,15 @@ defmodule SymphonyElixir.PitchAIPM.Client do
         t.created_at,
         t.updated_at,
         coalesce((select count(*)::integer from pitchai_symphony.task_comments c where c.task_id = t.id), 0) as comment_count,
+        (
+          select c.body
+          from pitchai_symphony.task_comments c
+          where c.task_id = t.id
+            and lower(trim(coalesce(t.state_name, ''))) = 'blocked'
+            and lower(trim(coalesce(c.body, ''))) like any(array['blocked%', 'true blocker%'])
+          order by c.created_at desc, c.id desc
+          limit 1
+        ) as blocked_reason,
         coalesce((select count(*)::integer from pitchai_symphony.task_pr_links pr where pr.task_id = t.id), 0) as pr_count,
         (select max(w.updated_at) from pitchai_symphony.task_workpads w where w.task_id = t.id) as workpad_updated_at,
         row_number() over (
@@ -1110,6 +1120,7 @@ defmodule SymphonyElixir.PitchAIPM.Client do
       created_at: encode_datetime(data["created_at"]),
       updated_at: encode_datetime(data["updated_at"]),
       comment_count: data["comment_count"] || 0,
+      blocked_reason: clean_string(data["blocked_reason"]),
       pr_count: data["pr_count"] || 0,
       workpad_updated_at: encode_datetime(data["workpad_updated_at"])
     }

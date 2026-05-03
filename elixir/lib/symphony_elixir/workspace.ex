@@ -298,7 +298,11 @@ defmodule SymphonyElixir.Workspace do
 
     task =
       Task.async(fn ->
-        System.cmd("sh", ["-lc", command], cd: workspace, stderr_to_stdout: true)
+        System.cmd("sh", ["-lc", command],
+          cd: workspace,
+          env: hook_env(issue_context, workspace, hook_name),
+          stderr_to_stdout: true
+        )
       end)
 
     case Task.yield(task, timeout_ms) do
@@ -319,7 +323,15 @@ defmodule SymphonyElixir.Workspace do
 
     Logger.info("Running workspace hook hook=#{hook_name} #{issue_log_context(issue_context)} workspace=#{workspace} worker_host=#{worker_host}")
 
-    case run_remote_command(worker_host, "cd #{shell_escape(workspace)} && #{command}", timeout_ms) do
+    script =
+      [
+        hook_export_script(issue_context, workspace, hook_name),
+        "cd #{shell_escape(workspace)}",
+        command
+      ]
+      |> Enum.join("\n")
+
+    case run_remote_command(worker_host, script, timeout_ms) do
       {:ok, cmd_result} ->
         handle_hook_command_result(cmd_result, workspace, issue_context, hook_name)
 
@@ -354,6 +366,24 @@ defmodule SymphonyElixir.Workspace do
         binary_part(binary_output, 0, max_bytes) <> "... (truncated)"
     end
   end
+
+  defp hook_env(issue_context, workspace, hook_name) do
+    [
+      {"SYMPHONY_ISSUE_ID", hook_value(issue_context.issue_id)},
+      {"SYMPHONY_ISSUE_IDENTIFIER", hook_value(issue_context.issue_identifier)},
+      {"SYMPHONY_WORKSPACE", hook_value(workspace)},
+      {"SYMPHONY_HOOK_NAME", hook_value(hook_name)}
+    ]
+  end
+
+  defp hook_export_script(issue_context, workspace, hook_name) do
+    hook_env(issue_context, workspace, hook_name)
+    |> Enum.map_join("\n", fn {key, value} -> "export #{key}=#{shell_escape(value)}" end)
+  end
+
+  defp hook_value(nil), do: ""
+  defp hook_value(value) when is_binary(value), do: value
+  defp hook_value(value), do: to_string(value)
 
   defp validate_workspace_path(workspace, nil) when is_binary(workspace) do
     expanded_workspace = Path.expand(workspace)

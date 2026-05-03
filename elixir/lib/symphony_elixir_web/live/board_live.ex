@@ -247,6 +247,11 @@ defmodule SymphonyElixirWeb.BoardLive do
                       </span>
                     </div>
 
+                    <div :if={blocked_reason(task)} class="ticket-blocked-reason">
+                      <strong>Blocked</strong>
+                      <span><%= blocked_reason(task) %></span>
+                    </div>
+
                     <div class="ticket-badges">
                       <span :if={visible_runtime_badge(task.runtime_status)} class={["runtime-badge", task.runtime_status.kind]}>
                         <%= visible_runtime_badge(task.runtime_status) %>
@@ -309,8 +314,8 @@ defmodule SymphonyElixirWeb.BoardLive do
 
   defp create_task_modal(assigns) do
     ~H"""
-    <div class="detail-backdrop create-backdrop" role="presentation">
-      <section class="create-modal" role="dialog" aria-modal="true" aria-labelledby="create-ticket-title">
+    <div id="create-task-backdrop" class="detail-backdrop create-backdrop" role="presentation" phx-hook="ModalScrollLock">
+      <section class="create-modal" role="dialog" aria-modal="true" aria-labelledby="create-ticket-title" tabindex="-1">
         <header class="create-header">
           <h2 id="create-ticket-title">New ticket</h2>
           <button type="button" phx-click="close_create_task" aria-label="Close new ticket form">x</button>
@@ -365,8 +370,8 @@ defmodule SymphonyElixirWeb.BoardLive do
 
   defp task_detail_modal(assigns) do
     ~H"""
-    <div class="detail-backdrop" role="presentation">
-      <section class="detail-modal" role="dialog" aria-modal="true" aria-labelledby="task-detail-title">
+    <div id="task-detail-backdrop" class="detail-backdrop" role="presentation" phx-hook="ModalScrollLock">
+      <section class="detail-modal" role="dialog" aria-modal="true" aria-labelledby="task-detail-title" tabindex="-1">
         <div class="detail-main">
           <header class="detail-header">
             <div class="detail-crumbs">
@@ -384,6 +389,11 @@ defmodule SymphonyElixirWeb.BoardLive do
           <div :if={detail_chips != []} class="detail-inline-meta">
             <span :for={chip <- detail_chips} class="detail-chip"><%= chip %></span>
           </div>
+
+          <section :if={blocked_reason(@task)} class="blocked-reason-panel" aria-label="Blocked reason">
+            <strong>Blocked</strong>
+            <p><%= blocked_reason(@task) %></p>
+          </section>
 
           <section class="agent-progress-panel" aria-label="Agent progress">
             <div class="agent-progress-heading">
@@ -422,7 +432,7 @@ defmodule SymphonyElixirWeb.BoardLive do
           <section class="detail-activity" aria-label="Task activity">
             <h2>Activity</h2>
 
-            <div :for={section <- @task.workpad_sections} class="workpad-section">
+            <div :for={section <- visible_workpad_sections(@task)} class="workpad-section">
               <div class="workpad-section-heading">
                 <h3><%= section.title %></h3>
                 <span :if={section.source == "app-server"}>live app-server</span>
@@ -774,6 +784,26 @@ defmodule SymphonyElixirWeb.BoardLive do
   defp in_progress_task?(_task, %{state_name: "In Progress"}), do: true
   defp in_progress_task?(%{state: "In Progress"}, _column), do: true
   defp in_progress_task?(_task, _column), do: false
+
+  defp blocked_reason(task) when is_map(task) do
+    task
+    |> Map.get(:blocked_reason)
+    |> normalize_optional_string()
+  end
+
+  defp blocked_reason(_task), do: nil
+
+  defp visible_workpad_sections(%{workpad_sections: sections} = task) when is_list(sections) do
+    Enum.reject(sections, &empty_optional_blockers_section?(&1, task))
+  end
+
+  defp visible_workpad_sections(_task), do: []
+
+  defp empty_optional_blockers_section?(%{key: "blockers", items: [], text_lines: []}, task) do
+    is_nil(blocked_reason(task))
+  end
+
+  defp empty_optional_blockers_section?(_section, _task), do: false
 
   defp agent_progress_subtitle(%{runtime_status: %{kind: "running"}}), do: "Codex app-server is actively working this task."
   defp agent_progress_subtitle(%{runtime_status: %{kind: "retrying"}}), do: "Work is queued for retry."

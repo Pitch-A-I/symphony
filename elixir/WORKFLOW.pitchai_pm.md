@@ -19,6 +19,12 @@ polling:
   interval_ms: 5000
 workspace:
   root: /root/code/pitchai_symphony_workspaces
+hooks:
+  timeout_ms: 300000
+  after_create: |
+    sh /root/code/pitchai_symphony/elixir/priv/scripts/bootstrap_pitchai_pm_workspace.sh
+  before_run: |
+    sh /root/code/pitchai_symphony/elixir/priv/scripts/bootstrap_pitchai_pm_workspace.sh
 agent:
   max_concurrent_agents: 20
   max_turns: 6
@@ -59,7 +65,7 @@ Instructions:
 
 1. This is an unattended orchestration session. Never ask a human to perform follow-up actions.
 2. Use the `pitchai_pm` tool for project-management task reads/writes.
-3. Only stop early for a true blocker: missing required auth, permissions, secrets, or a required external service. Record blockers in the workpad.
+3. Only stop early for a true blocker: missing required auth, permissions, secrets, source checkout, or a required external service. Record the blocker in the workpad `### Blockers`, add a `pitchai_pm.add_comment` blocker summary, and move the task to `Blocked`.
 4. Final message must report completed actions and blockers only. Do not include vague next steps for the user.
 5. Work only in the provided workspace.
 

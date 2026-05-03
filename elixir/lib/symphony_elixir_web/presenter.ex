@@ -5,7 +5,7 @@ defmodule SymphonyElixirWeb.Presenter do
 
   alias SymphonyElixir.{Config, Orchestrator, PitchAIPM, StatusDashboard}
 
-  @workpad_section_titles ["Plan", "Acceptance Criteria", "Validation", "Notes"]
+  @workpad_section_titles ["Plan", "Acceptance Criteria", "Validation", "Notes", "Blockers"]
   @checkbox_line ~r/^(\s*)-\s+\[(x|X| )\]\s+(.+)$/
   @heading_line ~r/^###\s+(.+?)\s*$/
 
@@ -475,6 +475,7 @@ defmodule SymphonyElixirWeb.Presenter do
     detail
     |> Map.put(:description_text, description_text(Map.get(detail, :description)))
     |> Map.put(:workpad_sections, sections)
+    |> Map.put(:blocked_reason, blocked_reason(detail, sections))
     |> Map.put(:progress, progress_summary(sections))
   end
 
@@ -610,6 +611,58 @@ defmodule SymphonyElixirWeb.Presenter do
   end
 
   defp description_text(_description), do: nil
+
+  defp blocked_reason(detail, sections) when is_map(detail) and is_list(sections) do
+    if blocked_state?(Map.get(detail, :state)) do
+      latest_blocker_comment_body(Map.get(detail, :comments, [])) || blocker_section_text(sections)
+    end
+  end
+
+  defp blocked_reason(_detail, _sections), do: nil
+
+  defp blocked_state?(state_name) when is_binary(state_name) do
+    String.downcase(String.trim(state_name)) == "blocked"
+  end
+
+  defp blocked_state?(_state_name), do: false
+
+  defp latest_blocker_comment_body(comments) when is_list(comments) do
+    Enum.find_value(comments, fn
+      %{"body" => body} when is_binary(body) -> blocker_comment_body(body)
+      %{body: body} when is_binary(body) -> blocker_comment_body(body)
+      _ -> nil
+    end)
+  end
+
+  defp latest_blocker_comment_body(_comments), do: nil
+
+  defp blocker_comment_body(body) do
+    cleaned_body = String.trim(body)
+    normalized_body = String.downcase(cleaned_body)
+
+    if cleaned_body != "" and (String.starts_with?(normalized_body, "blocked") or String.starts_with?(normalized_body, "true blocker")) do
+      cleaned_body
+    end
+  end
+
+  defp blocker_section_text(sections) do
+    sections
+    |> Enum.find(&(Map.get(&1, :key) == "blockers"))
+    |> case do
+      %{text_lines: lines} when is_list(lines) ->
+        lines
+        |> Enum.map(&String.trim/1)
+        |> Enum.reject(&(&1 == ""))
+        |> Enum.join(" ")
+        |> clean_joined_text()
+
+      _ ->
+        nil
+    end
+  end
+
+  defp clean_joined_text(""), do: nil
+  defp clean_joined_text(text), do: text
 
   defp normalize_runtime_plan(plan) when is_list(plan) do
     plan
