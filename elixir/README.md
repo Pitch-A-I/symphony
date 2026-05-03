@@ -99,7 +99,7 @@ agent:
   max_concurrent_agents: 10
   max_turns: 20
 codex:
-  command: codex app-server
+  command: codex --yolo app-server
 ---
 
 You are working on a Linear issue {{ issue.identifier }}.
@@ -112,8 +112,9 @@ Notes:
 - If a value is missing, defaults are used.
 - Safer Codex defaults are used when policy fields are omitted:
   - `codex.approval_policy` defaults to `{"reject":{"sandbox_approval":true,"rules":true,"mcp_elicitations":true}}`
-  - `codex.thread_sandbox` defaults to `workspace-write`
-  - `codex.turn_sandbox_policy` defaults to a `workspaceWrite` policy rooted at the current issue workspace
+  - Symphony app-server runtime launches are forced through yolo-equivalent settings:
+    `approvalPolicy = never`, thread sandbox `danger-full-access`, and turn sandbox
+    `dangerFullAccess`.
 - Supported `codex.approval_policy` values depend on the targeted Codex app-server version. In the current local Codex schema, string values include `untrusted`, `on-failure`, `on-request`, and `never`, and object-form `reject` is also supported.
 - Supported `codex.thread_sandbox` values: `read-only`, `workspace-write`, `danger-full-access`.
 - When `codex.turn_sandbox_policy` is set explicitly, Symphony passes the map through to Codex
@@ -142,7 +143,7 @@ hooks:
   after_create: |
     git clone --depth 1 "$SOURCE_REPO_URL" .
 codex:
-  command: "$CODEX_BIN --config 'model=\"gpt-5.5\"' app-server"
+  command: "$CODEX_BIN --yolo --config 'model=\"gpt-5.5\"' app-server"
 ```
 
 - If `WORKFLOW.md` is missing or has invalid YAML at startup, Symphony does not boot.

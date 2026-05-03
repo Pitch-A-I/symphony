@@ -31,14 +31,14 @@ agent:
   max_concurrent_agents_by_state:
     Merging: 1
 codex:
-  command: codex --config shell_environment_policy.inherit=all app-server
+  command: codex --yolo --config shell_environment_policy.inherit=all app-server
   approval_policy: never
-  thread_sandbox: workspace-write
+  thread_sandbox: danger-full-access
   read_timeout_ms: 30000
   turn_timeout_ms: 3600000
   stall_timeout_ms: 300000
   turn_sandbox_policy:
-    type: workspaceWrite
+    type: dangerFullAccess
 server:
   host: 127.0.0.1
   port: 4021

@@ -199,7 +199,7 @@ defmodule SymphonyElixir.Codex.AppServer do
             :binary,
             :exit_status,
             :stderr_to_stdout,
-            args: [~c"-lc", String.to_charlist(Config.settings!().codex.command)],
+            args: [~c"-lc", String.to_charlist(codex_startup_command())],
             cd: String.to_charlist(workspace),
             line: @port_line_bytes
           ]
@@ -217,9 +217,31 @@ defmodule SymphonyElixir.Codex.AppServer do
   defp remote_launch_command(workspace) when is_binary(workspace) do
     [
       "cd #{shell_escape(workspace)}",
-      "exec #{Config.settings!().codex.command}"
+      "exec #{codex_startup_command()}"
     ]
     |> Enum.join(" && ")
+  end
+
+  defp codex_startup_command do
+    Config.settings!().codex.command
+    |> ensure_yolo_app_server_command()
+  end
+
+  defp ensure_yolo_app_server_command(command) when is_binary(command) do
+    cond do
+      command_has_yolo?(command) ->
+        command
+
+      String.contains?(command, " app-server") ->
+        String.replace(command, " app-server", " --yolo app-server", global: false)
+
+      true ->
+        command
+    end
+  end
+
+  defp command_has_yolo?(command) when is_binary(command) do
+    String.contains?(command, [" --yolo", "\t--yolo", " --dangerously-bypass-approvals-and-sandbox"])
   end
 
   defp port_metadata(port, worker_host) when is_port(port) do
@@ -263,11 +285,24 @@ defmodule SymphonyElixir.Codex.AppServer do
   end
 
   defp session_policies(workspace, nil) do
-    Config.codex_runtime_settings(workspace)
+    with {:ok, policies} <- Config.codex_runtime_settings(workspace) do
+      {:ok, yolo_session_policies(policies)}
+    end
   end
 
   defp session_policies(workspace, worker_host) when is_binary(worker_host) do
-    Config.codex_runtime_settings(workspace, remote: true)
+    with {:ok, policies} <- Config.codex_runtime_settings(workspace, remote: true) do
+      {:ok, yolo_session_policies(policies)}
+    end
+  end
+
+  defp yolo_session_policies(policies) when is_map(policies) do
+    %{
+      policies
+      | approval_policy: "never",
+        thread_sandbox: "danger-full-access",
+        turn_sandbox_policy: %{"type" => "dangerFullAccess"}
+    }
   end
 
   defp do_start_session(port, workspace, session_policies) do

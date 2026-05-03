@@ -76,7 +76,7 @@ defmodule SymphonyElixir.AppServerTest do
     end
   end
 
-  test "app server passes explicit turn sandbox policies through unchanged" do
+  test "app server forces yolo turn sandbox policy over explicit policies" do
     test_root =
       Path.join(
         System.tmp_dir!(),
@@ -136,8 +136,8 @@ defmodule SymphonyElixir.AppServerTest do
       issue = %Issue{
         id: "issue-supported-turn-policies",
         identifier: "MT-1001",
-        title: "Validate explicit turn sandbox policy passthrough",
-        description: "Ensure runtime startup forwards configured turn sandbox policies unchanged",
+        title: "Validate yolo turn sandbox policy",
+        description: "Ensure runtime startup forces yolo turn sandbox policy",
         state: "In Progress",
         url: "https://example.org/issues/MT-1001",
         labels: ["backend"]
@@ -171,7 +171,8 @@ defmodule SymphonyElixir.AppServerTest do
                    |> Jason.decode!()
                    |> then(fn payload ->
                      payload["method"] == "turn/start" &&
-                       get_in(payload, ["params", "sandboxPolicy"]) == configured_policy
+                       get_in(payload, ["params", "approvalPolicy"]) == "never" &&
+                       get_in(payload, ["params", "sandboxPolicy"]) == %{"type" => "dangerFullAccess"}
                    end)
                  else
                    false
@@ -262,7 +263,7 @@ defmodule SymphonyElixir.AppServerTest do
     end
   end
 
-  test "app server fails when command execution approval is required under safer defaults" do
+  test "app server auto-approves command execution approval requests under forced yolo" do
     test_root =
       Path.join(
         System.tmp_dir!(),
@@ -292,6 +293,10 @@ defmodule SymphonyElixir.AppServerTest do
             printf '%s\\n' '{"id":3,"result":{"turn":{"id":"turn-89"}}}'
             printf '%s\\n' '{"id":99,"method":"item/commandExecution/requestApproval","params":{"command":"gh pr view","cwd":"/tmp","reason":"need approval"}}'
             ;;
+          4)
+            printf '%s\\n' '{"method":"turn/completed"}'
+            exit 0
+            ;;
           *)
             sleep 1
             ;;
@@ -309,17 +314,14 @@ defmodule SymphonyElixir.AppServerTest do
       issue = %Issue{
         id: "issue-approval-required",
         identifier: "MT-89",
-        title: "Approval required",
-        description: "Ensure safer defaults do not auto approve requests",
+        title: "Approval auto-approved",
+        description: "Ensure forced yolo auto-approves requests",
         state: "In Progress",
         url: "https://example.org/issues/MT-89",
         labels: ["backend"]
       }
 
-      assert {:error, {:approval_required, payload}} =
-               AppServer.run(workspace, "Handle approval request", issue)
-
-      assert payload["method"] == "item/commandExecution/requestApproval"
+      assert {:ok, _result} = AppServer.run(workspace, "Handle approval request", issue)
     after
       File.rm_rf(test_root)
     end
@@ -1364,16 +1366,9 @@ defmodule SymphonyElixir.AppServerTest do
       assert argv_line =~ "cd "
       assert argv_line =~ remote_workspace
       assert argv_line =~ "exec "
-      assert argv_line =~ "fake-remote-codex app-server"
+      assert argv_line =~ "fake-remote-codex --yolo app-server"
 
-      expected_turn_policy = %{
-        "type" => "workspaceWrite",
-        "writableRoots" => [remote_workspace],
-        "readOnlyAccess" => %{"type" => "fullAccess"},
-        "networkAccess" => false,
-        "excludeTmpdirEnvVar" => false,
-        "excludeSlashTmp" => false
-      }
+      expected_turn_policy = %{"type" => "dangerFullAccess"}
 
       assert Enum.any?(lines, fn line ->
                if String.starts_with?(line, "JSON:") do
@@ -1382,7 +1377,9 @@ defmodule SymphonyElixir.AppServerTest do
                  |> Jason.decode!()
                  |> then(fn payload ->
                    payload["method"] == "thread/start" &&
-                     get_in(payload, ["params", "cwd"]) == remote_workspace
+                     get_in(payload, ["params", "cwd"]) == remote_workspace &&
+                     get_in(payload, ["params", "approvalPolicy"]) == "never" &&
+                     get_in(payload, ["params", "sandbox"]) == "danger-full-access"
                  end)
                else
                  false
@@ -1397,6 +1394,7 @@ defmodule SymphonyElixir.AppServerTest do
                  |> then(fn payload ->
                    payload["method"] == "turn/start" &&
                      get_in(payload, ["params", "cwd"]) == remote_workspace &&
+                     get_in(payload, ["params", "approvalPolicy"]) == "never" &&
                      get_in(payload, ["params", "sandboxPolicy"]) == expected_turn_policy
                  end)
                else

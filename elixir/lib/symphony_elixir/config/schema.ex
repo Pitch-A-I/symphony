@@ -172,7 +172,7 @@ defmodule SymphonyElixir.Config.Schema do
 
     @primary_key false
     embedded_schema do
-      field(:command, :string, default: "codex app-server")
+      field(:command, :string, default: "codex --yolo app-server")
 
       field(:approval_policy, StringOrMap,
         default: %{
