@@ -467,6 +467,8 @@ defmodule SymphonyElixir.PitchAIPM.Client do
       title,
       state,
       value_name,
+      project_name,
+      assignee,
       priority,
       labels,
       branch_name,
@@ -484,6 +486,8 @@ defmodule SymphonyElixir.PitchAIPM.Client do
         t.name as title,
         trim(t.state_name) as state,
         t.value_name,
+        p.name as project_name,
+        tr.assignee,
         coalesce(tr.priority, 5) as priority,
         coalesce(tr.labels, array[]::text[]) as labels,
         tr.branch_name,
@@ -499,6 +503,7 @@ defmodule SymphonyElixir.PitchAIPM.Client do
           order by t.rank asc nulls last, coalesce(tr.priority, 5), t.updated_at desc nulls last, t.created_at desc nulls last, t.name
         ) as board_rank
       from public.tasks t
+      left join public.projects p on p.id = t.project_id
       left join pitchai_symphony.task_tracking tr on tr.task_id = t.id
       where t.project_id = $1::text::uuid
         and nullif(trim(coalesce(t.state_name, '')), '') is not null
@@ -876,6 +881,8 @@ defmodule SymphonyElixir.PitchAIPM.Client do
       title: data["title"],
       state: data["state"],
       value_name: clean_string(data["value_name"]) || "Task",
+      project_name: clean_string(data["project_name"]),
+      assignee: clean_string(data["assignee"]),
       priority: data["priority"],
       rank: data["rank"],
       labels: labels(data["labels"]),

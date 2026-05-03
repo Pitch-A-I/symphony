@@ -15,6 +15,8 @@ defmodule SymphonyElixirWeb.BoardLive do
       socket
       |> assign(:payload, load_payload())
       |> assign(:selected_task, nil)
+      |> assign(:group_by, "project")
+      |> assign(:show_hidden_columns, false)
 
     if connected?(socket) do
       :ok = ObservabilityPubSub.subscribe()
@@ -44,6 +46,16 @@ defmodule SymphonyElixirWeb.BoardLive do
   @impl true
   def handle_event("close_task", _params, socket) do
     {:noreply, assign(socket, :selected_task, nil)}
+  end
+
+  @impl true
+  def handle_event("set_group_by", %{"group_by" => group_by}, socket) do
+    {:noreply, assign(socket, :group_by, normalize_group_by(group_by))}
+  end
+
+  @impl true
+  def handle_event("toggle_hidden_columns", _params, socket) do
+    {:noreply, update(socket, :show_hidden_columns, &(!&1))}
   end
 
   @impl true
@@ -84,33 +96,7 @@ defmodule SymphonyElixirWeb.BoardLive do
   def render(assigns) do
     ~H"""
     <section class="board-page">
-      <header class="board-titlebar">
-        <div class="window-controls" aria-hidden="true">
-          <span></span>
-          <span></span>
-          <span></span>
-        </div>
-        <div class="titlebar-center">
-          <span class="linear-mark"></span>
-          <span><%= project_name(@payload) %> / Issues</span>
-        </div>
-        <div class="titlebar-actions">
-          <a class="icon-button" href="/status" title="Status terminal" aria-label="Status terminal">
-            <span aria-hidden="true">S</span>
-          </a>
-          <button class="icon-button" type="button" phx-click="refresh" title="Refresh board" aria-label="Refresh board">
-            <span aria-hidden="true">R</span>
-          </button>
-        </div>
-      </header>
-
       <div class="board-appbar">
-        <div class="project-crumb">
-          <span class="project-glyph"></span>
-          <span class="project-name"><%= project_name(@payload) %></span>
-          <span class="project-star" aria-hidden="true">*</span>
-        </div>
-
         <nav class="board-tabs" aria-label="Board views">
           <a href="#" class="board-tab">Overview</a>
           <a href="#" class="board-tab">Updates</a>
@@ -119,8 +105,23 @@ defmodule SymphonyElixirWeb.BoardLive do
         </nav>
 
         <div class="board-controls">
-          <button class="text-tool" type="button">Filter</button>
-          <button class="text-tool" type="button">Display</button>
+          <form phx-change="set_group_by" class="group-control">
+            <label for="board-group-by">Group</label>
+            <select id="board-group-by" name="group_by">
+              <option
+                :for={option <- group_by_options()}
+                value={option.value}
+                selected={@group_by == option.value}
+              >
+                <%= option.label %>
+              </option>
+            </select>
+          </form>
+          <button class="text-tool" type="button" phx-click="toggle_hidden_columns">
+            <%= if @show_hidden_columns, do: "Hide hidden", else: "Show hidden" %>
+          </button>
+          <a class="text-tool" href="/status">Status</a>
+          <button class="text-tool" type="button" phx-click="refresh">Refresh</button>
         </div>
       </div>
 
@@ -130,7 +131,11 @@ defmodule SymphonyElixirWeb.BoardLive do
           <span><%= @payload.error.code %>: <%= @payload.error.message %></span>
         </div>
       <% else %>
-        <div id="kanban-board" class="board-workspace" phx-hook="KanbanBoard">
+        <div
+          id="kanban-board"
+          class={["board-workspace", @show_hidden_columns && "shows-hidden-columns"]}
+          phx-hook="KanbanBoard"
+        >
           <div class="board-columns" role="list" aria-label="Ticket columns">
             <section
               :for={column <- @payload.board.columns}
@@ -149,44 +154,48 @@ defmodule SymphonyElixirWeb.BoardLive do
               </header>
 
               <div class="ticket-list" data-state-name={column.state_name}>
-                <article
-                  :for={task <- column.tasks}
-                  class={["ticket-card", runtime_class(task)]}
-                  data-task-id={task.id}
-                  data-task-title={task.title}
-                  data-state-name={column.state_name}
-                  phx-click="open_task"
-                  phx-value-task_id={task.id}
-                >
-                  <div class="ticket-key"><%= task.identifier %></div>
-                  <div class="ticket-title-row">
-                    <%= if in_progress_task?(task, column) do %>
-                      <span class="state-spinner" style={"--state-color: #{column.color || "#d5a11e"}"} aria-hidden="true"></span>
-                    <% else %>
-                      <span class="issue-ring" style={"--state-color: #{column.color || "#9ca3af"}"} aria-hidden="true"></span>
-                    <% end %>
-                    <span class="ticket-title">
-                      <%= task.title %>
-                    </span>
-                  </div>
+                <div :for={group <- grouped_tasks(column.tasks, @group_by)} class="issue-group">
+                  <div :if={group.label} class="issue-group-label"><%= group.label %></div>
 
-                  <div class="ticket-badges">
-                    <span :if={task.runtime_status} class={["runtime-badge", task.runtime_status.kind]}>
-                      <%= task.runtime_status.label %>
-                    </span>
-                    <span :if={task.priority && task.priority < 5} class="soft-badge">
-                      P<%= task.priority %>
-                    </span>
-                    <span :if={task.pr_count > 0} class="soft-badge">PR</span>
-                    <span :if={task.comment_count > 0} class="soft-badge"><%= task.comment_count %> comments</span>
-                    <span :for={label <- Enum.take(task.labels, 2)} class="soft-badge"><%= label %></span>
-                  </div>
+                  <article
+                    :for={task <- group.tasks}
+                    class={["ticket-card", runtime_class(task)]}
+                    data-task-id={task.id}
+                    data-task-title={task.title}
+                    data-state-name={column.state_name}
+                    phx-click="open_task"
+                    phx-value-task_id={task.id}
+                  >
+                    <div class="ticket-key"><%= task.identifier %></div>
+                    <div class="ticket-title-row">
+                      <%= if in_progress_task?(task, column) do %>
+                        <span class="state-spinner" style={"--state-color: #{column.color || "#d5a11e"}"} aria-hidden="true"></span>
+                      <% else %>
+                        <span class="issue-ring" style={"--state-color: #{column.color || "#9ca3af"}"} aria-hidden="true"></span>
+                      <% end %>
+                      <span class="ticket-title">
+                        <%= task.title %>
+                      </span>
+                    </div>
 
-                  <div class="ticket-meta">
-                    <span>Updated <%= format_updated(task.updated_at) %></span>
-                    <span :if={task.branch_name}><%= task.branch_name %></span>
-                  </div>
-                </article>
+                    <div class="ticket-badges">
+                      <span :if={task.runtime_status} class={["runtime-badge", task.runtime_status.kind]}>
+                        <%= task.runtime_status.label %>
+                      </span>
+                      <span :if={task.priority && task.priority < 5} class="soft-badge">
+                        P<%= task.priority %>
+                      </span>
+                      <span :if={task.pr_count > 0} class="soft-badge">PR</span>
+                      <span :if={task.comment_count > 0} class="soft-badge"><%= task.comment_count %> comments</span>
+                      <span :for={label <- Enum.take(task.labels, 2)} class="soft-badge"><%= label %></span>
+                    </div>
+
+                    <div class="ticket-meta">
+                      <span>Updated <%= format_updated(task.updated_at) %></span>
+                      <span :if={task.branch_name}><%= task.branch_name %></span>
+                    </div>
+                  </article>
+                </div>
 
                 <div :if={column.tasks == []} class="empty-column">No tickets</div>
               </div>
@@ -195,7 +204,7 @@ defmodule SymphonyElixirWeb.BoardLive do
             </section>
           </div>
 
-          <aside class="hidden-columns" aria-label="Hidden columns">
+          <aside :if={@show_hidden_columns} class="hidden-columns" aria-label="Hidden columns">
             <header class="hidden-title">
               <span class="caret" aria-hidden="true"></span>
               <span>Hidden columns</span>
@@ -227,7 +236,7 @@ defmodule SymphonyElixirWeb.BoardLive do
         <div class="detail-main">
           <header class="detail-header">
             <div class="detail-crumbs">
-              <span><%= @task.project.name || "Project" %></span>
+              <span><%= display_project_name(@task.project.name) %></span>
               <span aria-hidden="true">/</span>
               <span><%= @task.identifier %></span>
             </div>
@@ -253,7 +262,10 @@ defmodule SymphonyElixirWeb.BoardLive do
                 <h2>Agent progress</h2>
                 <p><%= agent_progress_subtitle(@task) %></p>
               </div>
-              <strong><%= @task.progress.done %>/<%= @task.progress.total %></strong>
+              <strong class="progress-count">
+                <span>Checklist</span>
+                <%= @task.progress.done %>/<%= @task.progress.total %>
+              </strong>
             </div>
             <div class="detail-progress-track" aria-hidden="true">
               <span style={"width: #{@task.progress.percent}%"}></span>
@@ -287,22 +299,24 @@ defmodule SymphonyElixirWeb.BoardLive do
                 <span :if={section.source == "app-server"}>live app-server</span>
               </div>
 
-              <div :if={section.items != []} class="checklist">
-                <div
-                  :for={item <- section.items}
-                  class={["checklist-item", item.checked && "is-checked"]}
-                  style={"--depth: #{item.depth}"}
-                >
-                  <span class="checkmark" aria-hidden="true"></span>
-                  <span><%= item.text %></span>
+              <div class={["workpad-section-body", section.key == "plan" && "is-plan-scroll"]}>
+                <div :if={section.items != []} class="checklist">
+                  <div
+                    :for={item <- section.items}
+                    class={["checklist-item", item.checked && "is-checked"]}
+                    style={"--depth: #{item.depth}"}
+                  >
+                    <span class="checkmark" aria-hidden="true"></span>
+                    <span><%= item.text %></span>
+                  </div>
                 </div>
-              </div>
 
-              <div :if={section.items == [] && section.text_lines == []} class="detail-empty-line">
-                <%= empty_section_label(section, @task) %>
-              </div>
+                <div :if={section.items == [] && section.text_lines == []} class="detail-empty-line">
+                  <%= empty_section_label(section, @task) %>
+                </div>
 
-              <p :for={line <- section.text_lines} class="detail-note-line"><%= line %></p>
+                <p :for={line <- section.text_lines} class="detail-note-line"><%= line %></p>
+              </div>
             </div>
           </section>
         </div>
@@ -324,7 +338,7 @@ defmodule SymphonyElixirWeb.BoardLive do
             </div>
             <div>
               <dt>Project</dt>
-              <dd><%= @task.project.name || "n/a" %></dd>
+              <dd><%= display_project_name(@task.project.name, "n/a") %></dd>
             </div>
             <div>
               <dt>Updated</dt>
@@ -399,16 +413,56 @@ defmodule SymphonyElixirWeb.BoardLive do
     Endpoint.config(:snapshot_timeout_ms) || 15_000
   end
 
-  defp project_name(%{board: %{project: %{name: name}}}) when is_binary(name), do: name
-  defp project_name(%{tracker: %{label: label}}), do: label
-  defp project_name(_payload), do: "Symphony"
-
   defp state_label("Symphony " <> rest), do: rest
   defp state_label(state_name), do: state_name
 
   defp runtime_class(%{runtime_status: %{kind: "running"}}), do: "is-running"
   defp runtime_class(%{runtime_status: %{kind: "retrying"}}), do: "is-retrying"
   defp runtime_class(_task), do: nil
+
+  defp group_by_options do
+    [
+      %{value: "project", label: "Project"},
+      %{value: "assignee", label: "Assignee"},
+      %{value: "priority", label: "Priority"},
+      %{value: "none", label: "None"}
+    ]
+  end
+
+  defp normalize_group_by(value) when value in ["project", "assignee", "priority", "none"], do: value
+  defp normalize_group_by(_value), do: "project"
+
+  defp grouped_tasks(tasks, "none"), do: [%{label: nil, tasks: tasks}]
+  defp grouped_tasks([], _group_by), do: []
+
+  defp grouped_tasks(tasks, group_by) do
+    groups =
+      tasks
+      |> Enum.map(&task_group_label(&1, group_by))
+      |> Enum.uniq()
+
+    Enum.map(groups, fn label ->
+      %{label: label, tasks: Enum.filter(tasks, &(task_group_label(&1, group_by) == label))}
+    end)
+  end
+
+  defp task_group_label(task, "project"), do: display_project_name(Map.get(task, :project_name), "No project")
+  defp task_group_label(task, "assignee"), do: Map.get(task, :assignee) || "Unassigned"
+  defp task_group_label(task, "priority"), do: "P#{Map.get(task, :priority) || 5}"
+  defp task_group_label(task, _group_by), do: display_project_name(Map.get(task, :project_name), "No project")
+
+  defp display_project_name(project_name, fallback \\ "Project")
+
+  defp display_project_name(project_name, fallback) when is_binary(project_name) do
+    display_name =
+      project_name
+      |> String.trim()
+      |> String.replace_prefix("Repo: ", "")
+
+    if display_name == "", do: fallback, else: display_name
+  end
+
+  defp display_project_name(_project_name, fallback), do: fallback
 
   defp in_progress_task?(_task, %{state_name: "In Progress"}), do: true
   defp in_progress_task?(%{state: "In Progress"}, _column), do: true

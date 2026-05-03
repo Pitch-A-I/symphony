@@ -66,6 +66,8 @@ defmodule SymphonyElixir.ExtensionsTest do
                  title: "Summarize feedback from Slack",
                  state: "Suggested",
                  value_name: "Task",
+                 project_name: "TODO App",
+                 assignee: nil,
                  priority: 4,
                  rank: 1024.0,
                  labels: ["demo"],
@@ -91,6 +93,8 @@ defmodule SymphonyElixir.ExtensionsTest do
                  title: "Upgrade to latest React version",
                  state: "Todo",
                  value_name: "Task",
+                 project_name: "TODO App",
+                 assignee: nil,
                  priority: 5,
                  rank: 1024.0,
                  labels: [],
@@ -116,6 +120,8 @@ defmodule SymphonyElixir.ExtensionsTest do
                  title: "Dispatch active PM task",
                  state: "In Progress",
                  value_name: "Task",
+                 project_name: "TODO App",
+                 assignee: "symphony",
                  priority: 3,
                  rank: 1024.0,
                  labels: [],
@@ -752,16 +758,19 @@ defmodule SymphonyElixir.ExtensionsTest do
     start_test_endpoint(orchestrator: orchestrator_name, snapshot_timeout_ms: 50)
 
     {:ok, view, html} = live(build_conn(), "/")
-    assert html =~ "TODO App / Issues"
+    refute html =~ "TODO App / Issues"
+    assert html =~ "Group"
+    assert html =~ "Project"
     assert html =~ "Suggested"
     refute html =~ "Backlog"
     assert html =~ "Todo"
     assert html =~ "In Progress"
     assert html =~ "Human Review"
-    assert html =~ "Hidden columns"
-    assert html =~ "Rework"
-    assert html =~ "Merging"
-    assert html =~ "Done"
+    assert html =~ "TODO App"
+    refute html =~ "Hidden columns"
+    refute html =~ "Rework"
+    refute html =~ "Merging"
+    refute html =~ "Done"
     assert html =~ "state-spinner"
     assert html =~ "data-drop-state=\"Todo\""
     assert html =~ "MT-HTTP"
@@ -770,8 +779,15 @@ defmodule SymphonyElixir.ExtensionsTest do
     assert html =~ "MT-890"
     refute html =~ "SYMPHONY STATUS"
 
+    hidden_html = render_click(view, "toggle_hidden_columns")
+    assert hidden_html =~ "Hidden columns"
+    assert hidden_html =~ "Rework"
+    assert hidden_html =~ "Merging"
+    assert hidden_html =~ "Done"
+
     detail = render_click(view, "open_task", %{"task_id" => "issue-http"})
     assert detail =~ "Agent progress"
+    assert detail =~ "Checklist"
     assert detail =~ "Render agent progress like the Symphony demo."
     assert detail =~ "Inspect the current board"
     assert detail =~ "Render nested checkboxes"
@@ -784,7 +800,8 @@ defmodule SymphonyElixir.ExtensionsTest do
     assert_receive {:pitchai_pm_move_issue_on_board, "issue-todo", "Human Review", %{after_task_id: nil, before_task_id: nil, reason: "kanban_drag_drop"}}
 
     rendered = render_click(view, "refresh")
-    assert rendered =~ "TODO App / Issues"
+    refute rendered =~ "TODO App / Issues"
+    assert rendered =~ "Group"
   end
 
   test "status liveview renders and refreshes over pubsub" do
