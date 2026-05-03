@@ -20,7 +20,7 @@ polling:
 workspace:
   root: /root/code/pitchai_symphony_workspaces
 agent:
-  max_concurrent_agents: 1
+  max_concurrent_agents: 20
   max_turns: 6
   max_concurrent_agents_by_state:
     Merging: 1
