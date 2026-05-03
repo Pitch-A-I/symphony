@@ -387,13 +387,58 @@ button {
 }
 
 .issue-group-label {
+  display: grid;
+  grid-template-columns: 0.5rem minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 0.18rem;
+  width: 100%;
+  padding: 0;
+  border: 0;
+  background: transparent;
   overflow: hidden;
   color: #7a828f;
+  cursor: pointer;
   font-size: 0.66rem;
   font-weight: 720;
   line-height: 1.1;
+  text-align: left;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.issue-group-label:hover {
+  color: #4f5867;
+}
+
+.group-chevron {
+  width: 0.32rem;
+  height: 0.32rem;
+  border-right: 1.5px solid currentColor;
+  border-bottom: 1.5px solid currentColor;
+  transform: rotate(45deg) translateY(-1px);
+  transition: transform 120ms ease;
+}
+
+.group-chevron.is-collapsed {
+  transform: rotate(-45deg);
+}
+
+.issue-group-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.issue-group-count {
+  min-width: 1rem;
+  padding: 0.02rem 0.24rem;
+  border-radius: 999px;
+  background: #edf0f4;
+  color: #69717f;
+  font-size: 0.6rem;
+  font-weight: 760;
+  line-height: 1.2;
+  text-align: center;
 }
 
 .ticket-card {

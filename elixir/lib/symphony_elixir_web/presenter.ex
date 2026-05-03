@@ -157,6 +157,18 @@ defmodule SymphonyElixirWeb.Presenter do
     end
   end
 
+  @spec set_board_group_collapsed(String.t(), String.t(), String.t(), boolean()) :: :ok | {:error, term()}
+  def set_board_group_collapsed(group_by, column_state_name, group_key, collapsed?)
+      when is_binary(group_by) and is_binary(column_state_name) and is_binary(group_key) and is_boolean(collapsed?) do
+    case Config.settings!().tracker.kind do
+      "pitchai_pm" ->
+        pitchai_pm_client().set_board_group_collapsed(group_by, column_state_name, group_key, collapsed?)
+
+      other ->
+        {:error, {:unsupported_board_tracker, other}}
+    end
+  end
+
   @spec create_board_task(map(), GenServer.name(), timeout()) :: {:ok, map()} | {:error, term()}
   def create_board_task(params, orchestrator, snapshot_timeout_ms) when is_map(params) do
     runtime = dashboard_payload(orchestrator, snapshot_timeout_ms)

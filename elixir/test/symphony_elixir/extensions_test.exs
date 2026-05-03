@@ -53,6 +53,14 @@ defmodule SymphonyElixir.ExtensionsTest do
        }}
     end
 
+    def set_board_group_collapsed(group_by, column_state_name, group_key, collapsed?) do
+      if recipient = Application.get_env(:symphony_elixir, :pitchai_pm_test_recipient) do
+        send(recipient, {:pitchai_pm_set_board_group_collapsed, group_by, column_state_name, group_key, collapsed?})
+      end
+
+      :ok
+    end
+
     def move_issue_on_board(task_id, state_name, opts) do
       if recipient = Application.get_env(:symphony_elixir, :pitchai_pm_test_recipient) do
         send(recipient, {:pitchai_pm_move_issue_on_board, task_id, state_name, opts})
@@ -65,6 +73,7 @@ defmodule SymphonyElixir.ExtensionsTest do
       {:ok,
        %{
          project: %{id: "project-pm", name: "TODO App"},
+         collapsed_groups: Application.get_env(:symphony_elixir, :pitchai_pm_fake_collapsed_groups, []),
          project_options: [
            %{id: "project-pm", name: "TODO App"},
            %{id: "project-driestar", name: "Driestar — AI Pilot Regie (Formatief Toetsen)"}
@@ -83,6 +92,7 @@ defmodule SymphonyElixir.ExtensionsTest do
                  title: "Summarize feedback from Slack",
                  state: "Suggested",
                  value_name: "Task",
+                 project_id: "project-pm",
                  project_name: "TODO App",
                  assignee: nil,
                  priority: 4,
@@ -111,6 +121,7 @@ defmodule SymphonyElixir.ExtensionsTest do
                  title: "Upgrade to latest React version",
                  state: "Todo",
                  value_name: "Task",
+                 project_id: "project-pm",
                  project_name: "TODO App",
                  assignee: nil,
                  priority: 5,
@@ -139,6 +150,7 @@ defmodule SymphonyElixir.ExtensionsTest do
                  title: "Dispatch active PM task",
                  state: "In Progress",
                  value_name: "Task",
+                 project_id: "project-pm",
                  project_name: "TODO App",
                  assignee: "symphony",
                  priority: 3,
@@ -167,6 +179,7 @@ defmodule SymphonyElixir.ExtensionsTest do
                  title: "Blocked source checkout task",
                  state: "Blocked",
                  value_name: "Task",
+                 project_id: "project-pm",
                  project_name: "TODO App",
                  assignee: "symphony",
                  priority: 2,
@@ -406,6 +419,7 @@ defmodule SymphonyElixir.ExtensionsTest do
     linear_client_module = Application.get_env(:symphony_elixir, :linear_client_module)
     pitchai_pm_client_module = Application.get_env(:symphony_elixir, :pitchai_pm_client_module)
     pitchai_pm_test_recipient = Application.get_env(:symphony_elixir, :pitchai_pm_test_recipient)
+    pitchai_pm_fake_collapsed_groups = Application.get_env(:symphony_elixir, :pitchai_pm_fake_collapsed_groups)
 
     on_exit(fn ->
       if is_nil(linear_client_module) do
@@ -424,6 +438,12 @@ defmodule SymphonyElixir.ExtensionsTest do
         Application.delete_env(:symphony_elixir, :pitchai_pm_test_recipient)
       else
         Application.put_env(:symphony_elixir, :pitchai_pm_test_recipient, pitchai_pm_test_recipient)
+      end
+
+      if is_nil(pitchai_pm_fake_collapsed_groups) do
+        Application.delete_env(:symphony_elixir, :pitchai_pm_fake_collapsed_groups)
+      else
+        Application.put_env(:symphony_elixir, :pitchai_pm_fake_collapsed_groups, pitchai_pm_fake_collapsed_groups)
       end
     end)
 
@@ -865,6 +885,8 @@ defmodule SymphonyElixir.ExtensionsTest do
     assert dashboard_css =~ ".ticket-card"
     assert dashboard_css =~ ".ticket-blocked-reason"
     assert dashboard_css =~ ".dependency-badge"
+    assert dashboard_css =~ ".group-chevron"
+    assert dashboard_css =~ ".issue-group-count"
     assert dashboard_css =~ ".blocked-reason-panel"
     assert dashboard_css =~ ".state-spinner"
     assert dashboard_css =~ ".drag-placeholder"
@@ -922,6 +944,8 @@ defmodule SymphonyElixir.ExtensionsTest do
     assert html =~ "3: --"
     assert html =~ "Group"
     assert html =~ "Project"
+    assert html =~ "issue-group-label"
+    assert html =~ "group-chevron"
     assert html =~ "Suggested"
     refute html =~ "Backlog"
     assert html =~ "Todo"
@@ -945,12 +969,21 @@ defmodule SymphonyElixir.ExtensionsTest do
     assert html =~ "MT-890"
     refute html =~ "SYMPHONY STATUS"
 
+    Application.put_env(:symphony_elixir, :pitchai_pm_test_recipient, self())
+
+    render_click(view, "toggle_issue_group", %{
+      "group_by" => "project",
+      "column_state_name" => "Suggested",
+      "group_key" => "project:project-pm",
+      "collapsed" => "true"
+    })
+
+    assert_receive {:pitchai_pm_set_board_group_collapsed, "project", "Suggested", "project:project-pm", true}
+
     create_modal = render_click(view, "open_create_task", %{"state_name" => "Todo"})
     assert create_modal =~ "New ticket"
     assert create_modal =~ "Driestar — AI Pilot Regie"
     assert create_modal =~ ~r/<option[^>]+value="Todo"[^>]+selected/
-
-    Application.put_env(:symphony_elixir, :pitchai_pm_test_recipient, self())
 
     created_html =
       render_submit(view, "create_task", %{
@@ -1012,6 +1045,42 @@ defmodule SymphonyElixir.ExtensionsTest do
     rendered = render_click(view, "refresh")
     refute rendered =~ "TODO App / Issues"
     assert rendered =~ "Group"
+  end
+
+  test "kanban board applies persisted collapsed project groups" do
+    orchestrator_name = Module.concat(__MODULE__, :CollapsedBoardOrchestrator)
+    Application.put_env(:symphony_elixir, :pitchai_pm_client_module, FakePitchAIPMClient)
+
+    Application.put_env(:symphony_elixir, :pitchai_pm_fake_collapsed_groups, [
+      %{group_by: "project", column_state_name: "Todo", group_key: "project:project-pm"}
+    ])
+
+    write_workflow_file!(Workflow.workflow_file_path(),
+      tracker_kind: "pitchai_pm",
+      tracker_project_id: "project-pm",
+      tracker_database_url: "postgresql://postgres:postgres@127.0.0.1:5432/test"
+    )
+
+    {:ok, _pid} =
+      StaticOrchestrator.start_link(
+        name: orchestrator_name,
+        snapshot: static_snapshot(),
+        refresh: %{
+          queued: true,
+          coalesced: true,
+          requested_at: DateTime.utc_now(),
+          operations: ["poll"]
+        }
+      )
+
+    start_test_endpoint(orchestrator: orchestrator_name, snapshot_timeout_ms: 50)
+
+    {:ok, _view, html} = live(build_conn(), "/")
+
+    assert html =~ "issue-group is-collapsed"
+    assert html =~ "aria-expanded=\"false\""
+    assert html =~ "issue-group-count"
+    refute html =~ "Upgrade to latest React version"
   end
 
   test "status liveview renders and refreshes over pubsub" do

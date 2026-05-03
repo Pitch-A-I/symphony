@@ -97,6 +97,29 @@ defmodule SymphonyElixirWeb.BoardLive do
   end
 
   @impl true
+  def handle_event("toggle_issue_group", params, socket) do
+    group_by = params |> Map.get("group_by") |> normalize_group_by()
+    column_state_name = optional_param(params, "column_state_name")
+    group_key = optional_param(params, "group_key")
+    collapsed? = Map.get(params, "collapsed") == "true"
+
+    if group_by == "none" or is_nil(column_state_name) or is_nil(group_key) do
+      {:noreply, put_flash(socket, :error, "Group toggle failed: invalid group")}
+    else
+      case Presenter.set_board_group_collapsed(group_by, column_state_name, group_key, collapsed?) do
+        :ok ->
+          {:noreply, reload_board(socket)}
+
+        {:error, reason} ->
+          {:noreply,
+           socket
+           |> put_flash(:error, "Group toggle failed: #{inspect(reason, pretty: false)}")
+           |> reload_board()}
+      end
+    end
+  end
+
+  @impl true
   def handle_event("toggle_hidden_columns", _params, socket) do
     {:noreply, update(socket, :show_hidden_columns, &(!&1))}
   end
@@ -223,10 +246,29 @@ defmodule SymphonyElixirWeb.BoardLive do
               </header>
 
               <div class="ticket-list" data-state-name={column.state_name}>
-                <div :for={group <- grouped_tasks(column.tasks, @group_by)} class="issue-group">
-                  <div :if={group.label} class="issue-group-label"><%= group.label %></div>
+                <div
+                  :for={group <- grouped_tasks(column.tasks, @group_by, collapsed_group_keys(@payload, @group_by, column.state_name))}
+                  class={["issue-group", group.collapsed && "is-collapsed"]}
+                >
+                  <button
+                    :if={group.label}
+                    class="issue-group-label"
+                    type="button"
+                    phx-click="toggle_issue_group"
+                    phx-value-group_by={@group_by}
+                    phx-value-column_state_name={column.state_name}
+                    phx-value-group_key={group.key}
+                    phx-value-collapsed={to_string(!group.collapsed)}
+                    aria-expanded={to_string(!group.collapsed)}
+                    aria-label={group_toggle_label(group)}
+                  >
+                    <span class={["group-chevron", group.collapsed && "is-collapsed"]} aria-hidden="true"></span>
+                    <span class="issue-group-name"><%= group.label %></span>
+                    <span :if={group.collapsed} class="issue-group-count"><%= length(group.tasks) %></span>
+                  </button>
 
                   <article
+                    :if={!group.collapsed}
                     :for={task <- group.tasks}
                     class={["ticket-card", runtime_class(task)]}
                     data-task-id={task.id}
@@ -758,24 +800,96 @@ defmodule SymphonyElixirWeb.BoardLive do
   defp normalize_group_by(value) when value in ["project", "assignee", "priority", "none"], do: value
   defp normalize_group_by(_value), do: "project"
 
-  defp grouped_tasks(tasks, "none"), do: [%{label: nil, tasks: tasks}]
-  defp grouped_tasks([], _group_by), do: []
+  @spec grouped_tasks([map()], String.t(), [String.t()]) :: [map()]
+  defp grouped_tasks(tasks, "none", _collapsed_keys), do: [%{key: "all", label: nil, tasks: tasks, collapsed: false}]
+  defp grouped_tasks([], _group_by, _collapsed_keys), do: []
 
-  defp grouped_tasks(tasks, group_by) do
+  defp grouped_tasks(tasks, group_by, collapsed_keys) do
     groups =
       tasks
-      |> Enum.map(&task_group_label(&1, group_by))
-      |> Enum.uniq()
+      |> Enum.map(&task_group(&1, group_by))
+      |> Enum.uniq_by(& &1.key)
 
-    Enum.map(groups, fn label ->
-      %{label: label, tasks: Enum.filter(tasks, &(task_group_label(&1, group_by) == label))}
+    Enum.map(groups, fn group ->
+      group_tasks = Enum.filter(tasks, &(task_group(&1, group_by).key == group.key))
+
+      group
+      |> Map.put(:tasks, group_tasks)
+      |> Map.put(:collapsed, group_collapsed?(collapsed_keys, group.key))
     end)
   end
 
-  defp task_group_label(task, "project"), do: display_project_name(Map.get(task, :project_name), "No project")
-  defp task_group_label(task, "assignee"), do: Map.get(task, :assignee) || "Unassigned"
-  defp task_group_label(task, "priority"), do: "P#{Map.get(task, :priority) || 5}"
-  defp task_group_label(task, _group_by), do: display_project_name(Map.get(task, :project_name), "No project")
+  @spec group_collapsed?([String.t()], String.t()) :: boolean()
+  defp group_collapsed?(collapsed_keys, group_key), do: group_key in collapsed_keys
+
+  defp task_group(task, "project") do
+    label = display_project_name(Map.get(task, :project_name), "No project")
+
+    %{
+      key: group_key("project", Map.get(task, :project_id), label),
+      label: label
+    }
+  end
+
+  defp task_group(task, "assignee") do
+    label = Map.get(task, :assignee) || "Unassigned"
+
+    %{
+      key: group_key("assignee", label),
+      label: label
+    }
+  end
+
+  defp task_group(task, "priority") do
+    priority = Map.get(task, :priority) || 5
+
+    %{
+      key: "priority:#{priority}",
+      label: "P#{priority}"
+    }
+  end
+
+  defp task_group(task, _group_by), do: task_group(task, "project")
+
+  defp group_key("project", project_id, _label) when is_binary(project_id) and project_id != "",
+    do: "project:#{project_id}"
+
+  defp group_key("project", _project_id, label), do: group_key("project-name", label)
+
+  defp group_key(prefix, label) do
+    normalized =
+      label
+      |> to_string()
+      |> String.trim()
+      |> String.downcase()
+
+    "#{prefix}:#{normalized}"
+  end
+
+  defp collapsed_group_keys(payload, group_by, column_state_name) do
+    payload
+    |> get_in([:board, :collapsed_groups])
+    |> case do
+      groups when is_list(groups) ->
+        groups
+        |> Enum.filter(&(Map.get(&1, :group_by) == group_by and Map.get(&1, :column_state_name) == column_state_name))
+        |> Enum.map(&Map.get(&1, :group_key))
+        |> Enum.reject(&is_nil/1)
+        |> Enum.uniq()
+
+      _groups ->
+        []
+    end
+  end
+
+  defp group_toggle_label(%{collapsed: true, label: label, tasks: tasks}) do
+    "Expand #{label}, #{length(tasks)} #{issue_count_label(tasks)}"
+  end
+
+  defp group_toggle_label(%{label: label}), do: "Collapse #{label}"
+
+  defp issue_count_label([_task]), do: "ticket"
+  defp issue_count_label(_tasks), do: "tickets"
 
   defp display_project_name(project_name, fallback \\ "Project")
 

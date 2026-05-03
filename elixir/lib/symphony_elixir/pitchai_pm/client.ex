@@ -249,7 +249,8 @@ defmodule SymphonyElixir.PitchAIPM.Client do
            scope_project_ids = Enum.map(projects, & &1.id),
            {:ok, state_counts} <- fetch_board_state_counts(project_id, scope_project_ids),
            {:ok, workflow_states} <- fetch_board_workflow_states(project_id),
-           {:ok, tasks} <- fetch_board_tasks(project_id, scope_project_ids) do
+           {:ok, tasks} <- fetch_board_tasks(project_id, scope_project_ids),
+           {:ok, collapsed_groups} <- fetch_board_collapsed_groups(project_id) do
         columns = build_board_columns(workflow_states, state_counts, tasks)
 
         {:ok,
@@ -257,6 +258,7 @@ defmodule SymphonyElixir.PitchAIPM.Client do
            project: project,
            scope: %{kind: "configured_project_plus_repo_scope_all_tasks", project_ids: scope_project_ids},
            project_options: projects,
+           collapsed_groups: collapsed_groups,
            columns: Enum.reject(columns, & &1.hidden?),
            hidden_columns: Enum.filter(columns, & &1.hidden?),
            task_limit_per_column: @board_task_limit_per_state
@@ -384,6 +386,48 @@ defmodule SymphonyElixir.PitchAIPM.Client do
   def create_board_task(params) when is_map(params) do
     with {:ok, task_id} <- insert_task(params, "Suggested") do
       task_detail(task_id)
+    end
+  end
+
+  @spec set_board_group_collapsed(String.t(), String.t(), String.t(), boolean()) :: :ok | {:error, term()}
+  def set_board_group_collapsed(group_by, column_state_name, group_key, collapsed?)
+      when is_binary(group_by) and is_binary(column_state_name) and is_binary(group_key) and is_boolean(collapsed?) do
+    with {:ok, params} <- board_group_collapse_params(group_by, column_state_name, group_key) do
+      if collapsed? do
+        persist_board_group_collapsed(params.project_id, params.group_by, params.column_state_name, params.group_key)
+      else
+        clear_board_group_collapsed(params.project_id, params.group_by, params.column_state_name, params.group_key)
+      end
+    end
+  end
+
+  defp board_group_collapse_params(group_by, column_state_name, group_key) do
+    with {:ok, project_id} <- board_project_id(),
+         {:ok, group_by} <- board_group_by(group_by),
+         {:ok, column_state_name} <- required_clean_string(column_state_name, :missing_column_state_name),
+         {:ok, group_key} <- required_clean_string(group_key, :missing_group_key) do
+      {:ok, %{project_id: project_id, group_by: group_by, column_state_name: column_state_name, group_key: group_key}}
+    end
+  end
+
+  defp board_project_id do
+    case Config.settings!().tracker.project_id |> clean_string() do
+      nil -> {:error, :missing_pitchai_pm_project_id}
+      project_id -> {:ok, project_id}
+    end
+  end
+
+  defp board_group_by(group_by) do
+    case clean_string(group_by) do
+      value when value in ["project", "assignee", "priority"] -> {:ok, value}
+      value -> {:error, {:unsupported_board_group_by, value}}
+    end
+  end
+
+  defp required_clean_string(value, error) do
+    case clean_string(value) do
+      nil -> {:error, error}
+      cleaned -> {:ok, cleaned}
     end
   end
 
@@ -1173,6 +1217,67 @@ defmodule SymphonyElixir.PitchAIPM.Client do
     end
   end
 
+  defp fetch_board_collapsed_groups(project_id) do
+    sql = """
+    select group_by, column_state_name, group_key
+    from pitchai_symphony.board_group_collapse_preferences
+    where board_project_id = $1::text::uuid
+      and actor = 'global'
+      and collapsed
+    order by group_by, column_state_name, group_key
+    """
+
+    with {:ok, result} <- query(sql, [project_id]) do
+      {:ok,
+       Enum.map(result.rows, fn [group_by, column_state_name, group_key] ->
+         %{group_by: group_by, column_state_name: column_state_name, group_key: group_key}
+       end)}
+    end
+  end
+
+  defp persist_board_group_collapsed(project_id, group_by, column_state_name, group_key) do
+    sql = """
+    insert into pitchai_symphony.board_group_collapse_preferences(
+      board_project_id,
+      actor,
+      group_by,
+      column_state_name,
+      group_key,
+      collapsed,
+      metadata
+    )
+    values ($1::text::uuid, 'global', $2::text, $3::text, $4::text, true, $5::text::jsonb)
+    on conflict (board_project_id, actor, group_by, column_state_name, group_key)
+    do update set
+      collapsed = true,
+      metadata = excluded.metadata,
+      updated_at = now()
+    """
+
+    metadata = Jason.encode!(%{"source" => "symphony_board_live"})
+
+    case query(sql, [project_id, group_by, column_state_name, group_key, metadata]) do
+      {:ok, _result} -> :ok
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  defp clear_board_group_collapsed(project_id, group_by, column_state_name, group_key) do
+    sql = """
+    delete from pitchai_symphony.board_group_collapse_preferences
+    where board_project_id = $1::text::uuid
+      and actor = 'global'
+      and group_by = $2::text
+      and column_state_name = $3::text
+      and group_key = $4::text
+    """
+
+    case query(sql, [project_id, group_by, column_state_name, group_key]) do
+      {:ok, _result} -> :ok
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
   defp fetch_board_tasks(project_id, scope_project_ids) when is_list(scope_project_ids) do
     sql = """
     select
@@ -1181,6 +1286,7 @@ defmodule SymphonyElixir.PitchAIPM.Client do
       title,
       state,
       value_name,
+      project_id,
       project_name,
       assignee,
       priority,
@@ -1202,6 +1308,7 @@ defmodule SymphonyElixir.PitchAIPM.Client do
         t.name as title,
         trim(t.state_name) as state,
         t.value_name,
+        t.project_id::text as project_id,
         p.name as project_name,
         tr.assignee,
         coalesce(tr.priority, 5) as priority,
@@ -1629,6 +1736,7 @@ defmodule SymphonyElixir.PitchAIPM.Client do
       title: data["title"],
       state: data["state"],
       value_name: clean_string(data["value_name"]) || "Task",
+      project_id: clean_string(data["project_id"]),
       project_name: clean_string(data["project_name"]),
       assignee: clean_string(data["assignee"]),
       priority: data["priority"],
