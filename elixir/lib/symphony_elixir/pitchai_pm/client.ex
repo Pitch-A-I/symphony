@@ -238,7 +238,8 @@ defmodule SymphonyElixir.PitchAIPM.Client do
       {:error, :missing_pitchai_pm_project_id}
     else
       with {:ok, project} <- fetch_board_project(project_id),
-           {:ok, project_ids} <- fetch_board_scope_project_ids(project),
+           {:ok, projects} <- fetch_board_scope_projects(project),
+           project_ids = Enum.map(projects, & &1.id),
            {:ok, state_counts} <- fetch_board_state_counts(project_ids),
            {:ok, workflow_states} <- fetch_board_workflow_states(project_id),
            {:ok, tasks} <- fetch_board_tasks(project_ids) do
@@ -248,6 +249,7 @@ defmodule SymphonyElixir.PitchAIPM.Client do
          %{
            project: project,
            scope: %{kind: "workspace_repo_projects", project_ids: project_ids},
+           project_options: projects,
            columns: Enum.reject(columns, & &1.hidden?),
            hidden_columns: Enum.filter(columns, & &1.hidden?),
            task_limit_per_column: @board_task_limit_per_state
@@ -368,6 +370,13 @@ defmodule SymphonyElixir.PitchAIPM.Client do
       {:ok, %{rows: [row], columns: columns}} -> {:ok, task_detail_row_to_map(columns, row)}
       {:ok, %{rows: []}} -> {:error, :task_not_found}
       {:error, reason} -> {:error, reason}
+    end
+  end
+
+  @spec create_board_task(map()) :: {:ok, map()} | {:error, term()}
+  def create_board_task(params) when is_map(params) do
+    with {:ok, task_id} <- insert_task(params, "Suggested") do
+      task_detail(task_id)
     end
   end
 
@@ -542,23 +551,25 @@ defmodule SymphonyElixir.PitchAIPM.Client do
     end
   end
 
-  defp fetch_board_scope_project_ids(%{id: project_id, workspace_id: workspace_id})
+  defp fetch_board_scope_projects(%{id: project_id, workspace_id: workspace_id})
        when is_binary(project_id) and is_binary(workspace_id) do
     sql = """
-    select distinct p.id::text
+    select p.id::text, p.name
     from public.projects p
     left join pitchai_dispatch.project_git_repos gr on gr.project_id = p.id
     where p.id = $1::text::uuid
        or (p.workspace_id = $2::text::uuid and gr.project_id is not null)
-    order by p.id::text
+    group by p.id, p.name
+    order by lower(regexp_replace(coalesce(p.name, ''), '^Repo: ', '')), p.id::text
     """
 
     with {:ok, result} <- query(sql, [project_id, workspace_id]) do
-      {:ok, Enum.map(result.rows, fn [id] -> id end)}
+      {:ok, Enum.map(result.rows, fn [id, name] -> %{id: id, name: name} end)}
     end
   end
 
-  defp fetch_board_scope_project_ids(%{id: project_id}) when is_binary(project_id), do: {:ok, [project_id]}
+  defp fetch_board_scope_projects(%{id: project_id, name: name}) when is_binary(project_id),
+    do: {:ok, [%{id: project_id, name: name}]}
 
   defp fetch_board_state_counts(project_ids) when is_list(project_ids) do
     sql = """
@@ -835,10 +846,16 @@ defmodule SymphonyElixir.PitchAIPM.Client do
   end
 
   defp tool_create_task(params) do
+    with {:ok, task_id} <- insert_task(params, "Backlog") do
+      tool_get_task(%{"task_id" => task_id})
+    end
+  end
+
+  defp insert_task(params, default_state_name) when is_binary(default_state_name) do
     with {:ok, project_id} <- required_string(params, "project_id"),
          {:ok, name} <- required_string(params, "name") do
       description = map_param(params, "description") || %{}
-      state_name = string_param(params, "state_name") || "Backlog"
+      state_name = string_param(params, "state_name") || default_state_name
       value_name = string_param(params, "value_name") || "Task"
 
       sql = """
@@ -848,11 +865,8 @@ defmodule SymphonyElixir.PitchAIPM.Client do
       """
 
       case query(sql, [name, Jason.encode!(description), project_id, state_name, value_name]) do
-        {:ok, %{rows: [[task_id]]}} ->
-          tool_get_task(%{"task_id" => task_id})
-
-        {:error, reason} ->
-          {:error, reason}
+        {:ok, %{rows: [[task_id]]}} -> {:ok, task_id}
+        {:error, reason} -> {:error, reason}
       end
     end
   end

@@ -52,6 +52,10 @@ defmodule SymphonyElixir.ExtensionsTest do
       {:ok,
        %{
          project: %{id: "project-pm", name: "TODO App"},
+         project_options: [
+           %{id: "project-pm", name: "TODO App"},
+           %{id: "project-driestar", name: "Driestar — AI Pilot Regie (Formatief Toetsen)"}
+         ],
          task_limit_per_column: 12,
          columns: [
            %{
@@ -215,6 +219,40 @@ defmodule SymphonyElixir.ExtensionsTest do
     end
 
     def task_detail(_task_id), do: {:error, :task_not_found}
+
+    def create_board_task(params) do
+      if recipient = Application.get_env(:symphony_elixir, :pitchai_pm_test_recipient) do
+        send(recipient, {:pitchai_pm_create_board_task, params})
+      end
+
+      {:ok,
+       %{
+         id: "created-ticket",
+         identifier: "PM-CREATED",
+         title: params["name"],
+         description: params["description"],
+         state: params["state_name"],
+         value_name: "Task",
+         rank: nil,
+         priority: nil,
+         labels: [],
+         branch_name: nil,
+         url: "",
+         assignee: nil,
+         repo_full_name: nil,
+         repo_url: nil,
+         workspace_path: nil,
+         tracking_metadata: %{},
+         project: %{id: params["project_id"], name: "TODO App"},
+         workpad: %{body: nil, updated_at: nil},
+         comments: [],
+         prs: [],
+         state_events: [],
+         blockers: [],
+         created_at: "2026-05-03T12:00:00Z",
+         updated_at: "2026-05-03T12:00:00Z"
+       }}
+    end
   end
 
   defmodule SlowOrchestrator do
@@ -782,6 +820,38 @@ defmodule SymphonyElixir.ExtensionsTest do
     refute html =~ "runtime-badge running"
     assert html =~ "MT-890"
     refute html =~ "SYMPHONY STATUS"
+
+    create_modal = render_click(view, "open_create_task", %{"state_name" => "Todo"})
+    assert create_modal =~ "New ticket"
+    assert create_modal =~ "Driestar — AI Pilot Regie"
+    assert create_modal =~ ~r/<option[^>]+value="Todo"[^>]+selected/
+
+    Application.put_env(:symphony_elixir, :pitchai_pm_test_recipient, self())
+
+    created_html =
+      render_submit(view, "create_task", %{
+        "task" => %{
+          "project_id" => "project-pm",
+          "state_name" => "Todo",
+          "name" => "New board-created ticket",
+          "prompt" => "Use the board create form to capture implementation instructions."
+        }
+      })
+
+    assert_receive {:pitchai_pm_create_board_task,
+                    %{
+                      "project_id" => "project-pm",
+                      "state_name" => "Todo",
+                      "name" => "New board-created ticket",
+                      "description" => %{
+                        "request" => "Use the board create form to capture implementation instructions."
+                      },
+                      "value_name" => "Task"
+                    }}
+
+    assert created_html =~ "New board-created ticket"
+    assert created_html =~ "Use the board create form to capture implementation instructions."
+    refute created_html =~ "detail-chip\">Task"
 
     hidden_html = render_click(view, "toggle_hidden_columns")
     assert hidden_html =~ "Hidden columns"

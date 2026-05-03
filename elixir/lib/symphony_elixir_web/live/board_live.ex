@@ -18,6 +18,7 @@ defmodule SymphonyElixirWeb.BoardLive do
       socket
       |> assign(:payload, payload)
       |> assign(:selected_task, nil)
+      |> assign(:create_task_form, nil)
       |> assign(:group_by, "project")
       |> assign(:show_hidden_columns, false)
       |> assign(:forecast_state, BoardForecast.new_state())
@@ -51,6 +52,43 @@ defmodule SymphonyElixirWeb.BoardLive do
   @impl true
   def handle_event("close_task", _params, socket) do
     {:noreply, assign(socket, :selected_task, nil)}
+  end
+
+  @impl true
+  def handle_event("open_create_task", params, socket) do
+    state_name = optional_param(params, "state_name")
+
+    {:noreply, assign(socket, :create_task_form, new_create_task_form(socket.assigns.payload, state_name))}
+  end
+
+  @impl true
+  def handle_event("close_create_task", _params, socket) do
+    {:noreply, assign(socket, :create_task_form, nil)}
+  end
+
+  @impl true
+  def handle_event("create_task", %{"task" => raw_form}, socket) do
+    case validate_create_task_form(raw_form, socket.assigns.payload) do
+      {:ok, params} ->
+        case Presenter.create_board_task(params, orchestrator(), snapshot_timeout_ms()) do
+          {:ok, detail} ->
+            socket =
+              socket
+              |> assign(:create_task_form, nil)
+              |> reload_board()
+              |> assign(:selected_task, detail)
+
+            {:noreply, socket}
+
+          {:error, reason} ->
+            form = create_task_form_with_errors(raw_form, %{form: create_error(reason)})
+
+            {:noreply, assign(socket, :create_task_form, form)}
+        end
+
+      {:error, form} ->
+        {:noreply, assign(socket, :create_task_form, form)}
+    end
   end
 
   @impl true
@@ -117,7 +155,14 @@ defmodule SymphonyElixirWeb.BoardLive do
           <a href="#" class="board-tab">Overview</a>
           <a href="#" class="board-tab">Updates</a>
           <a href="#" class="board-tab is-active">Issues</a>
-          <a href="#" class="board-tab">+</a>
+          <button
+            class="board-tab board-tab-add"
+            type="button"
+            phx-click="open_create_task"
+            aria-label="Create ticket"
+          >
+            +
+          </button>
         </nav>
 
         <div class="board-controls">
@@ -166,7 +211,15 @@ defmodule SymphonyElixirWeb.BoardLive do
                   <span class="column-count"><%= column.task_count %></span>
                 </div>
                 <div class="column-menu" aria-hidden="true">...</div>
-                <div class="column-plus" aria-hidden="true">+</div>
+                <button
+                  class="column-plus"
+                  type="button"
+                  phx-click="open_create_task"
+                  phx-value-state_name={column.state_name}
+                  aria-label={"Create ticket in #{state_label(column.state_name)}"}
+                >
+                  +
+                </button>
               </header>
 
               <div class="ticket-list" data-state-name={column.state_name}>
@@ -216,7 +269,15 @@ defmodule SymphonyElixirWeb.BoardLive do
                 <div :if={column.tasks == []} class="empty-column">No tickets</div>
               </div>
 
-              <div class="add-ticket-row" aria-hidden="true">+</div>
+              <button
+                class="add-ticket-row"
+                type="button"
+                phx-click="open_create_task"
+                phx-value-state_name={column.state_name}
+                aria-label={"Create ticket in #{state_label(column.state_name)}"}
+              >
+                +
+              </button>
             </section>
           </div>
 
@@ -240,8 +301,65 @@ defmodule SymphonyElixirWeb.BoardLive do
         </div>
 
         <.task_detail_modal :if={@selected_task} task={@selected_task} />
+        <.create_task_modal :if={@create_task_form} form={@create_task_form} payload={@payload} />
       <% end %>
     </section>
+    """
+  end
+
+  defp create_task_modal(assigns) do
+    ~H"""
+    <div class="detail-backdrop create-backdrop" role="presentation">
+      <section class="create-modal" role="dialog" aria-modal="true" aria-labelledby="create-ticket-title">
+        <header class="create-header">
+          <h2 id="create-ticket-title">New ticket</h2>
+          <button type="button" phx-click="close_create_task" aria-label="Close new ticket form">x</button>
+        </header>
+
+        <form id="create-ticket-form" class="create-form" phx-submit="create_task">
+          <div class="create-grid">
+            <label>
+              <span>Project</span>
+              <select name="task[project_id]" required>
+                <option :for={project <- create_project_options(@payload)} value={project.id} selected={project.id == @form.project_id}>
+                  <%= display_project_name(project.name) %>
+                </option>
+              </select>
+              <small :if={@form.errors[:project_id]}><%= @form.errors.project_id %></small>
+            </label>
+
+            <label>
+              <span>Column</span>
+              <select name="task[state_name]" required>
+                <option :for={state <- create_state_options(@payload)} value={state.state_name} selected={state.state_name == @form.state_name}>
+                  <%= state_label(state.state_name) %>
+                </option>
+              </select>
+              <small :if={@form.errors[:state_name]}><%= @form.errors.state_name %></small>
+            </label>
+          </div>
+
+          <label>
+            <span>Title</span>
+            <input name="task[name]" type="text" value={@form.name} required maxlength="180" autocomplete="off" />
+            <small :if={@form.errors[:name]}><%= @form.errors.name %></small>
+          </label>
+
+          <label>
+            <span>Prompt</span>
+            <textarea name="task[prompt]" required rows="5"><%= @form.prompt %></textarea>
+            <small :if={@form.errors[:prompt]}><%= @form.errors.prompt %></small>
+          </label>
+
+          <small :if={@form.errors[:form]} class="create-form-error"><%= @form.errors.form %></small>
+
+          <div class="create-actions">
+            <button type="button" class="create-secondary" phx-click="close_create_task">Cancel</button>
+            <button type="submit" class="create-primary">Create</button>
+          </div>
+        </form>
+      </section>
+    </div>
     """
   end
 
@@ -486,6 +604,129 @@ defmodule SymphonyElixirWeb.BoardLive do
   defp format_speed(speed) when speed < 1, do: :erlang.float_to_binary(speed, decimals: 2)
   defp format_speed(speed), do: :erlang.float_to_binary(speed, decimals: 1)
 
+  defp new_create_task_form(payload, state_name) do
+    %{
+      project_id: default_create_project_id(payload),
+      state_name: default_create_state_name(payload, state_name),
+      name: "",
+      prompt: "",
+      errors: %{}
+    }
+  end
+
+  defp create_task_form_with_errors(form, errors) do
+    %{
+      project_id: string_value(form, "project_id"),
+      state_name: string_value(form, "state_name"),
+      name: string_value(form, "name"),
+      prompt: string_value(form, "prompt"),
+      errors: errors
+    }
+  end
+
+  defp validate_create_task_form(form, payload) when is_map(form) do
+    errors =
+      %{}
+      |> require_known_project(form, payload)
+      |> require_known_state(form, payload)
+      |> require_nonempty(form, "name", :name, "Title is required.")
+      |> require_nonempty(form, "prompt", :prompt, "Prompt is required.")
+
+    if errors == %{} do
+      {:ok,
+       %{
+         "project_id" => string_value(form, "project_id"),
+         "state_name" => string_value(form, "state_name"),
+         "name" => string_value(form, "name"),
+         "description" => %{"request" => string_value(form, "prompt")},
+         "value_name" => "Task"
+       }}
+    else
+      {:error, create_task_form_with_errors(form, errors)}
+    end
+  end
+
+  defp create_error(reason), do: "Create failed: #{inspect(reason, pretty: false)}"
+
+  defp require_known_project(errors, form, payload) do
+    project_id = string_value(form, "project_id")
+
+    if Enum.any?(create_project_options(payload), &(&1.id == project_id)) do
+      errors
+    else
+      Map.put(errors, :project_id, "Choose a project.")
+    end
+  end
+
+  defp require_known_state(errors, form, payload) do
+    state_name = string_value(form, "state_name")
+
+    if Enum.any?(create_state_options(payload), &(&1.state_name == state_name)) do
+      errors
+    else
+      Map.put(errors, :state_name, "Choose a column.")
+    end
+  end
+
+  defp require_nonempty(errors, form, field, key, message) do
+    if string_value(form, field) == "", do: Map.put(errors, key, message), else: errors
+  end
+
+  defp create_project_options(%{board: %{project_options: projects}}) when is_list(projects) do
+    Enum.filter(projects, &(is_binary(Map.get(&1, :id)) and is_binary(Map.get(&1, :name))))
+  end
+
+  defp create_project_options(%{board: %{project: project}}) when is_map(project), do: [project]
+  defp create_project_options(_payload), do: []
+
+  defp create_state_options(%{board: %{columns: columns}}) when is_list(columns), do: columns
+  defp create_state_options(_payload), do: []
+
+  defp default_create_project_id(payload) do
+    board_project_id = get_in(payload, [:board, :project, :id])
+    project_options = create_project_options(payload)
+
+    if Enum.any?(project_options, &(&1.id == board_project_id)) do
+      board_project_id
+    else
+      first_project_id(project_options)
+    end
+  end
+
+  defp first_project_id([%{id: project_id} | _projects]), do: project_id
+  defp first_project_id([]), do: nil
+
+  defp default_create_state_name(payload, requested_state_name) do
+    requested_state_name = normalize_optional_string(requested_state_name)
+
+    cond do
+      state_option?(payload, requested_state_name) ->
+        requested_state_name
+
+      state_option?(payload, "Suggested") ->
+        "Suggested"
+
+      true ->
+        case create_state_options(payload) do
+          [%{state_name: state_name} | _columns] -> state_name
+          [] -> nil
+        end
+    end
+  end
+
+  defp state_option?(payload, state_name) when is_binary(state_name) do
+    Enum.any?(create_state_options(payload), &(&1.state_name == state_name))
+  end
+
+  defp state_option?(_payload, _state_name), do: false
+
+  defp string_value(form, key) do
+    form
+    |> Map.get(key, "")
+    |> to_string()
+    |> String.trim()
+  end
+
   defp group_by_options do
     [
       %{value: "project", label: "Project"},
@@ -588,6 +829,17 @@ defmodule SymphonyElixirWeb.BoardLive do
         nil
     end
   end
+
+  defp normalize_optional_string(value) when is_binary(value) do
+    value
+    |> String.trim()
+    |> case do
+      "" -> nil
+      trimmed -> trimmed
+    end
+  end
+
+  defp normalize_optional_string(_value), do: nil
 
   defp normalize_state(state_name) do
     state_name

@@ -156,6 +156,21 @@ defmodule SymphonyElixirWeb.Presenter do
     end
   end
 
+  @spec create_board_task(map(), GenServer.name(), timeout()) :: {:ok, map()} | {:error, term()}
+  def create_board_task(params, orchestrator, snapshot_timeout_ms) when is_map(params) do
+    runtime = dashboard_payload(orchestrator, snapshot_timeout_ms)
+
+    case Config.settings!().tracker.kind do
+      "pitchai_pm" ->
+        with {:ok, detail} <- pitchai_pm_client().create_board_task(params) do
+          {:ok, detail |> annotate_detail_runtime(runtime) |> enrich_detail_workpad()}
+        end
+
+      other ->
+        {:error, {:unsupported_board_tracker, other}}
+    end
+  end
+
   defp issue_payload_body(issue_identifier, running, retry) do
     %{
       issue_identifier: issue_identifier,

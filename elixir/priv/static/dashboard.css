@@ -156,10 +156,13 @@ button {
 }
 
 .board-tab {
+  border: 1px solid transparent;
+  background: transparent;
   min-height: 1.82rem;
   padding: 0.36rem 0.58rem;
   border-radius: 0.38rem;
   color: var(--board-muted);
+  cursor: pointer;
   font-size: 0.8rem;
   font-weight: 620;
 }
@@ -172,6 +175,12 @@ button {
 .board-tab:hover {
   background: var(--board-surface-soft);
   text-decoration: none;
+}
+
+.board-tab-add {
+  width: 1.82rem;
+  justify-content: center;
+  padding-inline: 0;
 }
 
 .board-controls {
@@ -342,6 +351,23 @@ button {
   justify-content: center;
   color: #9aa0aa;
   font-weight: 700;
+}
+
+.column-plus {
+  width: 1.12rem;
+  height: 1.12rem;
+  border: 1px solid transparent;
+  border-radius: 0.26rem;
+  background: transparent;
+  cursor: pointer;
+  line-height: 1;
+}
+
+.column-plus:hover,
+.add-ticket-row:hover {
+  border-color: var(--board-border);
+  background: var(--board-surface-soft);
+  color: #596170;
 }
 
 .ticket-list {
@@ -526,7 +552,165 @@ body.is-kanban-dragging {
 
 .add-ticket-row {
   margin-top: 0.24rem;
+  background: transparent;
+  cursor: pointer;
   font-size: 0.86rem;
+}
+
+.create-backdrop {
+  z-index: 90;
+}
+
+.create-modal {
+  width: min(35rem, calc(100vw - 2rem));
+  height: fit-content;
+  max-height: min(38rem, calc(100vh - 2rem));
+  overflow: hidden;
+  border: 1px solid rgba(214, 216, 222, 0.94);
+  border-radius: 0.58rem;
+  background: var(--board-surface);
+  box-shadow: 0 24px 60px rgba(23, 25, 31, 0.22);
+}
+
+.create-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.9rem;
+  padding: 1rem 1.05rem 0.75rem;
+  border-bottom: 1px solid var(--board-border);
+}
+
+.create-header h2 {
+  margin: 0;
+  color: #202229;
+  font-size: 1rem;
+  font-weight: 760;
+  letter-spacing: 0;
+}
+
+.create-header button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.8rem;
+  height: 1.8rem;
+  border: 1px solid transparent;
+  border-radius: 0.36rem;
+  background: transparent;
+  color: #6b7280;
+  cursor: pointer;
+  font-weight: 760;
+}
+
+.create-header button:hover,
+.create-secondary:hover {
+  border-color: var(--board-border);
+  background: var(--board-surface-soft);
+}
+
+.create-form {
+  display: flex;
+  flex-direction: column;
+  gap: 0.72rem;
+  padding: 0.9rem 1.05rem 1.05rem;
+}
+
+.create-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(8rem, 0.56fr);
+  gap: 0.62rem;
+}
+
+.create-form label {
+  display: flex;
+  flex-direction: column;
+  gap: 0.26rem;
+  min-width: 0;
+}
+
+.create-form label > span {
+  color: #4b5563;
+  font-size: 0.73rem;
+  font-weight: 720;
+}
+
+.create-form input,
+.create-form select,
+.create-form textarea {
+  width: 100%;
+  min-height: 2.05rem;
+  border: 1px solid var(--board-border);
+  border-radius: 0.38rem;
+  background: #fff;
+  color: #252932;
+  font: inherit;
+  font-size: 0.82rem;
+}
+
+.create-form input,
+.create-form select {
+  padding: 0.4rem 0.5rem;
+}
+
+.create-form textarea {
+  min-height: 7rem;
+  resize: vertical;
+  padding: 0.48rem 0.52rem;
+  line-height: 1.42;
+}
+
+.create-form input:focus,
+.create-form select:focus,
+.create-form textarea:focus {
+  border-color: #9aa8c7;
+  box-shadow: 0 0 0 3px rgba(66, 99, 235, 0.1);
+  outline: none;
+}
+
+.create-form small {
+  color: #a83255;
+  font-size: 0.68rem;
+  font-weight: 650;
+}
+
+.create-form-error {
+  padding: 0.35rem 0.45rem;
+  border: 1px solid #f0b7c6;
+  border-radius: 0.36rem;
+  background: #fff5f7;
+}
+
+.create-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 0.42rem;
+  padding-top: 0.1rem;
+}
+
+.create-secondary,
+.create-primary {
+  min-height: 2rem;
+  padding: 0.4rem 0.7rem;
+  border: 1px solid transparent;
+  border-radius: 0.38rem;
+  cursor: pointer;
+  font-size: 0.8rem;
+  font-weight: 700;
+}
+
+.create-secondary {
+  background: transparent;
+  color: #4b5563;
+}
+
+.create-primary {
+  background: #202229;
+  color: #fff;
+}
+
+.create-primary:hover {
+  background: #343842;
 }
 
 .hidden-columns {
