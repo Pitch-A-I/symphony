@@ -74,6 +74,10 @@ remote_branch_exists() {
   git ls-remote --exit-code --heads origin "$branch" >/dev/null 2>&1
 }
 
+fetch_origin_heads() {
+  git fetch --prune origin '+refs/heads/*:refs/remotes/origin/*'
+}
+
 local_branch_ref_exists() {
   branch="$1"
   git show-ref --verify --quiet "refs/remotes/origin/$branch" ||
@@ -165,6 +169,7 @@ if [ -n "$source_repo" ]; then
   log "cloning local source $source_repo for $repo_full_name"
   git clone --no-local "$source_repo" .
   git remote set-url origin "$repo_clone_url" || true
+  fetch_origin_heads
 else
   log "cloning remote source $repo_clone_url"
   git clone "$repo_clone_url" .
