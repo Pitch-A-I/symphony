@@ -239,16 +239,16 @@ defmodule SymphonyElixir.PitchAIPM.Client do
     else
       with {:ok, project} <- fetch_board_project(project_id),
            {:ok, projects} <- fetch_board_scope_projects(project),
-           project_ids = Enum.map(projects, & &1.id),
-           {:ok, state_counts} <- fetch_board_state_counts(project_ids),
+           scope_project_ids = Enum.map(projects, & &1.id),
+           {:ok, state_counts} <- fetch_board_state_counts(project_id, scope_project_ids),
            {:ok, workflow_states} <- fetch_board_workflow_states(project_id),
-           {:ok, tasks} <- fetch_board_tasks(project_ids) do
+           {:ok, tasks} <- fetch_board_tasks(project_id, scope_project_ids) do
         columns = build_board_columns(workflow_states, state_counts, tasks)
 
         {:ok,
          %{
            project: project,
-           scope: %{kind: "workspace_repo_projects", project_ids: project_ids},
+           scope: %{kind: "configured_project_plus_workspace_suggested", project_ids: scope_project_ids},
            project_options: projects,
            columns: Enum.reject(columns, & &1.hidden?),
            hidden_columns: Enum.filter(columns, & &1.hidden?),
@@ -571,16 +571,22 @@ defmodule SymphonyElixir.PitchAIPM.Client do
   defp fetch_board_scope_projects(%{id: project_id, name: name}) when is_binary(project_id),
     do: {:ok, [%{id: project_id, name: name}]}
 
-  defp fetch_board_state_counts(project_ids) when is_list(project_ids) do
+  defp fetch_board_state_counts(project_id, scope_project_ids) when is_list(scope_project_ids) do
     sql = """
     select trim(state_name) as state_name, count(*)::integer as task_count
     from public.tasks
-    where project_id::text = any($1::text[])
+    where (
+        project_id = $1::text::uuid
+        or (
+          project_id::text = any($2::text[])
+          and lower(trim(coalesce(state_name, ''))) = 'suggested'
+        )
+      )
       and nullif(trim(coalesce(state_name, '')), '') is not null
     group by trim(state_name)
     """
 
-    with {:ok, result} <- query(sql, [project_ids]) do
+    with {:ok, result} <- query(sql, [project_id, scope_project_ids]) do
       {:ok,
        result.rows
        |> Enum.map(fn [state_name, task_count] -> {state_name, task_count} end)
@@ -611,7 +617,7 @@ defmodule SymphonyElixir.PitchAIPM.Client do
     end
   end
 
-  defp fetch_board_tasks(project_ids) when is_list(project_ids) do
+  defp fetch_board_tasks(project_id, scope_project_ids) when is_list(scope_project_ids) do
     sql = """
     select
       id,
@@ -657,14 +663,20 @@ defmodule SymphonyElixir.PitchAIPM.Client do
       from public.tasks t
       left join public.projects p on p.id = t.project_id
       left join pitchai_symphony.task_tracking tr on tr.task_id = t.id
-      where t.project_id::text = any($1::text[])
+      where (
+          t.project_id = $1::text::uuid
+          or (
+            t.project_id::text = any($2::text[])
+            and lower(trim(coalesce(t.state_name, ''))) = 'suggested'
+          )
+        )
         and nullif(trim(coalesce(t.state_name, '')), '') is not null
     ) ranked
-    where board_rank <= $2
+    where board_rank <= $3
     order by lower(state), board_rank
     """
 
-    with {:ok, result} <- query(sql, [project_ids, @board_task_limit_per_state]) do
+    with {:ok, result} <- query(sql, [project_id, scope_project_ids, @board_task_limit_per_state]) do
       {:ok, Enum.map(result.rows, &board_task_row_to_map(result.columns, &1))}
     end
   end
