@@ -788,25 +788,30 @@ body.is-kanban-dragging {
   display: flex;
   align-items: center;
   justify-content: center;
-  padding: 3.4rem 3.2rem;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: 0.75rem 0.9rem;
   background: rgba(36, 38, 45, 0.34);
 }
 
 .detail-modal {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 18.5rem;
-  width: min(70rem, calc(100vw - 4rem));
-  max-height: min(48rem, calc(100vh - 4rem));
-  overflow: hidden;
+  grid-template-columns: minmax(0, 1fr) 21rem;
+  width: min(88rem, calc(100vw - 1.8rem));
+  max-height: calc(100vh - 1.5rem);
+  max-height: calc(100dvh - 1.5rem);
+  overflow-y: auto;
+  overscroll-behavior: contain;
   border: 1px solid rgba(214, 216, 222, 0.92);
   border-radius: 0.72rem;
   background: var(--board-surface);
   box-shadow: 0 24px 60px rgba(23, 25, 31, 0.22);
+  scrollbar-gutter: stable;
 }
 
 .detail-main {
   min-width: 0;
-  overflow-y: auto;
+  overflow: visible;
   padding: 1.35rem 1.55rem 1.6rem;
 }
 
@@ -1091,7 +1096,7 @@ body.is-kanban-dragging {
 
 .detail-sidebar {
   min-width: 0;
-  overflow-y: auto;
+  overflow: visible;
   border-left: 1px solid var(--board-border);
   background: #fbfbfc;
   padding: 1rem 1rem 1.3rem;
@@ -1383,6 +1388,7 @@ body.is-kanban-dragging {
     grid-template-columns: 1fr;
     width: 100%;
     max-height: calc(100vh - 1.6rem);
+    max-height: calc(100dvh - 1.6rem);
   }
 
   .detail-sidebar {
