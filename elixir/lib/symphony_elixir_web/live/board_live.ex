@@ -5,18 +5,23 @@ defmodule SymphonyElixirWeb.BoardLive do
 
   use Phoenix.LiveView, layout: {SymphonyElixirWeb.Layouts, :app}
 
+  alias SymphonyElixirWeb.BoardForecast
   alias SymphonyElixirWeb.{Endpoint, ObservabilityPubSub, Presenter}
 
   @board_tick_ms 5_000
 
   @impl true
   def mount(_params, _session, socket) do
+    payload = load_payload()
+
     socket =
       socket
-      |> assign(:payload, load_payload())
+      |> assign(:payload, payload)
       |> assign(:selected_task, nil)
       |> assign(:group_by, "project")
       |> assign(:show_hidden_columns, false)
+      |> assign(:forecast_state, BoardForecast.new_state())
+      |> refresh_forecast()
 
     if connected?(socket) do
       :ok = ObservabilityPubSub.subscribe()
@@ -96,6 +101,17 @@ defmodule SymphonyElixirWeb.BoardLive do
   def render(assigns) do
     ~H"""
     <section class="board-page">
+      <div class="agent-eta-line" aria-label="Agent completion forecast">
+        <span class={["eta-live-dot", forecast_idle?(@forecast) && "is-idle"]} aria-hidden="true"></span>
+        <strong><%= forecast_summary(@forecast) %></strong>
+        <span class="eta-rate"><%= forecast_rate(@forecast) %></span>
+        <span class="eta-milestones">
+          <span :for={milestone <- forecast_milestones(@forecast)}>
+            <%= milestone.count %>: <%= eta_time(milestone.eta_at) %>
+          </span>
+        </span>
+      </div>
+
       <div class="board-appbar">
         <nav class="board-tabs" aria-label="Board views">
           <a href="#" class="board-tab">Overview</a>
@@ -393,6 +409,7 @@ defmodule SymphonyElixirWeb.BoardLive do
   defp reload_board(socket) do
     socket
     |> assign(:payload, load_payload())
+    |> refresh_forecast()
     |> refresh_selected_task()
   end
 
@@ -404,6 +421,17 @@ defmodule SymphonyElixirWeb.BoardLive do
   end
 
   defp refresh_selected_task(socket), do: socket
+
+  defp refresh_forecast(socket) do
+    {forecast_state, forecast} =
+      socket.assigns
+      |> Map.get(:forecast_state, BoardForecast.new_state())
+      |> BoardForecast.update(Map.get(socket.assigns.payload, :running_progress, []), DateTime.utc_now())
+
+    socket
+    |> assign(:forecast_state, forecast_state)
+    |> assign(:forecast, forecast)
+  end
 
   defp orchestrator do
     Endpoint.config(:orchestrator) || SymphonyElixir.Orchestrator
@@ -429,6 +457,39 @@ defmodule SymphonyElixirWeb.BoardLive do
   end
 
   defp visible_labels(_labels), do: []
+
+  defp forecast_idle?(%{running_count: 0}), do: true
+  defp forecast_idle?(_forecast), do: false
+
+  defp forecast_summary(%{running_count: 0}), do: "Agents idle"
+
+  defp forecast_summary(%{running_count: running_count, measured_count: 0}) do
+    "#{running_count} active - ETA learning"
+  end
+
+  defp forecast_summary(%{running_count: running_count, measured_count: measured_count}) do
+    "#{measured_count}/#{running_count} measured"
+  end
+
+  defp forecast_summary(_forecast), do: "Agents idle"
+
+  defp forecast_rate(%{running_count: 0}), do: "no active checklists"
+  defp forecast_rate(%{measured_count: 0}), do: "checklist speed pending"
+
+  defp forecast_rate(%{throughput_items_per_minute: speed}) when is_number(speed) do
+    "#{format_speed(speed)} items/min"
+  end
+
+  defp forecast_rate(_forecast), do: "checklist speed pending"
+
+  defp forecast_milestones(%{milestones: milestones}) when is_list(milestones), do: milestones
+  defp forecast_milestones(_forecast), do: []
+
+  defp eta_time(%DateTime{} = eta_at), do: Calendar.strftime(eta_at, "%H:%MZ")
+  defp eta_time(_eta_at), do: "--"
+
+  defp format_speed(speed) when speed < 1, do: :erlang.float_to_binary(speed, decimals: 2)
+  defp format_speed(speed), do: :erlang.float_to_binary(speed, decimals: 1)
 
   defp group_by_options do
     [

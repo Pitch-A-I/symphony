@@ -28,11 +28,14 @@ defmodule SymphonyElixirWeb.Presenter do
       "pitchai_pm" ->
         case pitchai_pm_client().board_snapshot() do
           {:ok, board} ->
+            board = annotate_board_runtime(board, runtime)
+
             %{
               generated_at: generated_at,
               tracker: tracker_payload(),
               runtime: runtime,
-              board: annotate_board_runtime(board, runtime)
+              board: board,
+              running_progress: running_progress_entries(board, runtime)
             }
 
           {:error, reason} ->
@@ -406,6 +409,48 @@ defmodule SymphonyElixirWeb.Presenter do
   defp detail_runtime_status(nil, retrying) when is_map(retrying), do: %{kind: "retrying", label: "Retry #{retrying.attempt}"}
   defp detail_runtime_status(_running, _retrying), do: nil
 
+  defp running_progress_entries(board, runtime) do
+    running_by_id = runtime_index(Map.get(runtime, :running, []))
+
+    board
+    |> board_tasks()
+    |> Enum.filter(&running_task?/1)
+    |> Enum.flat_map(&running_progress_entry(&1, running_by_id, runtime))
+  end
+
+  defp board_tasks(board) do
+    (Map.get(board, :columns, []) ++ Map.get(board, :hidden_columns, []))
+    |> Enum.flat_map(&Map.get(&1, :tasks, []))
+  end
+
+  defp running_task?(%{runtime_status: %{kind: "running"}}), do: true
+  defp running_task?(_task), do: false
+
+  defp running_progress_entry(task, running_by_id, runtime) do
+    running = Map.get(running_by_id, task.id) || Map.get(running_by_id, task.identifier)
+
+    case pitchai_pm_client().task_detail(task.id) do
+      {:ok, detail} ->
+        detail = detail |> annotate_detail_runtime(runtime) |> enrich_detail_workpad()
+        progress = Map.get(detail, :progress, %{done: 0, total: 0})
+
+        [
+          %{
+            id: task.id,
+            identifier: task.identifier,
+            title: task.title,
+            done: progress.done,
+            total: progress.total,
+            started_at: running && Map.get(running, :started_at),
+            runtime_seconds: running && Map.get(running, :runtime_seconds)
+          }
+        ]
+
+      {:error, _reason} ->
+        []
+    end
+  end
+
   defp enrich_detail_workpad(detail) do
     sections = workpad_sections(get_in(detail, [:workpad, :body]))
     runtime_plan = detail |> Map.get(:runtime) |> runtime_plan_from_entry()
@@ -437,20 +482,7 @@ defmodule SymphonyElixirWeb.Presenter do
     section_map =
       body
       |> String.split("\n")
-      |> Enum.reduce(initial_section_map(), fn line, %{current: current, sections: sections} = acc ->
-        case Regex.run(@heading_line, line) do
-          [_match, title] ->
-            normalized_title = normalized_section_title(title)
-            %{acc | current: normalized_title}
-
-          _ ->
-            if current do
-              update_in(acc.sections[current].lines, &(&1 ++ [line]))
-            else
-              %{acc | sections: sections}
-            end
-        end
-      end)
+      |> Enum.reduce(initial_section_map(), &collect_workpad_line/2)
       |> Map.fetch!(:sections)
 
     @workpad_section_titles
@@ -471,6 +503,19 @@ defmodule SymphonyElixirWeb.Presenter do
   end
 
   defp initial_section(title), do: %{key: section_key(title), title: title, source: "workpad", lines: []}
+
+  defp collect_workpad_line(line, acc) do
+    case Regex.run(@heading_line, line) do
+      [_match, title] -> %{acc | current: normalized_section_title(title)}
+      _match -> append_workpad_line(acc, line)
+    end
+  end
+
+  defp append_workpad_line(%{current: nil} = acc, _line), do: acc
+
+  defp append_workpad_line(%{current: current} = acc, line) do
+    update_in(acc.sections[current].lines, &(&1 ++ [line]))
+  end
 
   defp normalized_section_title(title) do
     Enum.find(@workpad_section_titles, fn section_title ->

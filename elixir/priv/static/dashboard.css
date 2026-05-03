@@ -81,6 +81,62 @@ button {
   color: var(--board-ink);
 }
 
+.agent-eta-line {
+  display: flex;
+  align-items: center;
+  gap: 0.46rem;
+  min-height: 1.25rem;
+  overflow-x: auto;
+  padding: 0 1.05rem;
+  border-bottom: 1px solid var(--board-border);
+  background: #fbfbfc;
+  color: #4b5563;
+  font-size: 0.68rem;
+  font-weight: 650;
+  line-height: 1;
+  white-space: nowrap;
+  scrollbar-width: none;
+}
+
+.agent-eta-line::-webkit-scrollbar {
+  display: none;
+}
+
+.agent-eta-line strong {
+  color: #2f343d;
+  font-size: 0.7rem;
+  font-weight: 760;
+}
+
+.eta-live-dot {
+  flex: 0 0 auto;
+  width: 0.38rem;
+  height: 0.38rem;
+  border-radius: 50%;
+  background: var(--board-green);
+  box-shadow: 0 0 0 2px rgba(45, 157, 120, 0.12);
+}
+
+.eta-live-dot.is-idle {
+  background: #9ca3af;
+  box-shadow: 0 0 0 2px rgba(156, 163, 175, 0.14);
+}
+
+.eta-rate {
+  color: #7a828f;
+}
+
+.eta-milestones {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.42rem;
+  color: #606977;
+}
+
+.eta-milestones span {
+  font-variant-numeric: tabular-nums;
+}
+
 .board-appbar {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
@@ -182,7 +238,7 @@ button {
   display: grid;
   grid-template-columns: minmax(0, 1fr);
   gap: 0.8rem;
-  min-height: calc(100vh - 3.2rem);
+  min-height: calc(100vh - 4.45rem);
   padding: 0.72rem 0.9rem 1.1rem;
 }
 

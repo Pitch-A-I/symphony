@@ -759,6 +759,9 @@ defmodule SymphonyElixir.ExtensionsTest do
 
     {:ok, view, html} = live(build_conn(), "/")
     refute html =~ "TODO App / Issues"
+    assert html =~ "Agent completion forecast"
+    assert html =~ "1 active - ETA learning"
+    assert html =~ "3: --"
     assert html =~ "Group"
     assert html =~ "Project"
     assert html =~ "Suggested"

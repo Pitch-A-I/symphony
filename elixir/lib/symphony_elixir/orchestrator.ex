@@ -1291,8 +1291,7 @@ defmodule SymphonyElixir.Orchestrator do
     }
   end
 
-  defp update_payload(update) when is_map(update), do: update[:payload] || update["payload"] || %{}
-  defp update_payload(_update), do: %{}
+  defp update_payload(update), do: update[:payload] || update["payload"] || %{}
 
   defp payload_method(%{"method" => method}) when is_binary(method), do: method
   defp payload_method(%{method: method}) when is_binary(method), do: method
