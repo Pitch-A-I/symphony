@@ -22,6 +22,30 @@ defmodule SymphonyElixir.Codex.DynamicToolTest do
     assert description =~ "Linear"
   end
 
+  test "tool_specs advertises blocker reconciliation operations for pitchai_pm" do
+    write_workflow_file!(Workflow.workflow_file_path(),
+      tracker_kind: "pitchai_pm",
+      tracker_project_id: "project-pm",
+      tracker_database_url: "postgresql://postgres:postgres@127.0.0.1:5432/test"
+    )
+
+    assert [
+             %{
+               "inputSchema" => %{
+                 "properties" => %{
+                   "operation" => %{"description" => operation_description}
+                 }
+               },
+               "name" => "pitchai_pm"
+             }
+           ] = DynamicTool.tool_specs()
+
+    assert operation_description =~ "list_blocked_tasks"
+    assert operation_description =~ "list_blocker_tasks"
+    assert operation_description =~ "link_task_dependency"
+    assert operation_description =~ "merge_duplicate_blocker_task"
+  end
+
   test "unsupported tools return a failure payload with the supported tool list" do
     response = DynamicTool.execute("not_a_real_tool", %{})
 

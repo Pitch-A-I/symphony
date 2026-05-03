@@ -49,7 +49,11 @@ defmodule SymphonyElixir.ExtensionsTest do
          reopened_blocker_tasks: 0,
          merged_duplicate_blocker_tasks: 0,
          linked_dependencies: 0,
-         blocker_task_ids: []
+         created_reconciliation_agent_tasks: 0,
+         updated_reconciliation_agent_tasks: 0,
+         skipped_reconciliation_agent_tasks: 0,
+         blocker_task_ids: [],
+         reconciliation_agent_task_ids: []
        }}
     end
 

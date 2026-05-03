@@ -37,7 +37,8 @@ defmodule SymphonyElixir.Codex.DynamicTool do
     "properties" => %{
       "operation" => %{
         "type" => "string",
-        "description" => "One of get_task, list_tasks, list_workflow_states, update_task_state, append_changelog, get_workpad, upsert_workpad, add_comment, attach_pr, create_task."
+        "description" =>
+          "One of get_task, list_tasks, list_workflow_states, list_blocked_tasks, list_blocker_tasks, update_task_state, append_changelog, get_workpad, upsert_workpad, add_comment, attach_pr, create_task, link_task_dependency, merge_duplicate_blocker_task."
       },
       "params" => %{
         "type" => "object",

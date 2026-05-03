@@ -59,6 +59,47 @@ are the stable write keys.
 }
 ```
 
+### Reconcile blocked tasks
+
+Use these operations when this task is a `blocker_reconciliation_agent` task.
+
+```json
+{"operation": "list_blocked_tasks", "params": {"project_id": "<board-project-uuid>"}}
+```
+
+```json
+{"operation": "list_blocker_tasks", "params": {"project_id": "<board-project-uuid>"}}
+```
+
+Use semantic judgment to group equivalent blocker reasons across blocked tasks.
+Create or reuse one canonical `Suggested` blocker task per root cause, then link
+each blocked task to its canonical blocker.
+
+```json
+{
+  "operation": "link_task_dependency",
+  "params": {
+    "task_id": "<blocked-task-uuid>",
+    "blocker_task_id": "<canonical-blocker-task-uuid>",
+    "relation_type": "blocked_by",
+    "metadata": {"blocker_key": "<stable-key>"}
+  }
+}
+```
+
+When two blocker tasks describe the same root cause, keep the clearest task as
+canonical and merge the duplicate:
+
+```json
+{
+  "operation": "merge_duplicate_blocker_task",
+  "params": {
+    "canonical_task_id": "<canonical-blocker-task-uuid>",
+    "duplicate_task_id": "<duplicate-blocker-task-uuid>"
+  }
+}
+```
+
 ### Move task state
 
 ```json
@@ -135,7 +176,13 @@ Criteria`, `Validation`, `Notes`, and `Blockers` current.
     "description": {
       "request": "Resolve <blocker> so dependent tasks can continue."
     },
-    "value_name": "Task"
+    "value_name": "Task",
+    "labels": ["auto-blocker", "blocker", "symphony"],
+    "metadata": {
+      "managed_by": "pitchai_symphony",
+      "symphony_kind": "blocker_task",
+      "blocker_key": "<stable-key>"
+    }
   }
 }
 ```

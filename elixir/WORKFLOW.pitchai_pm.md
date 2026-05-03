@@ -82,12 +82,17 @@ Supported operations:
 - `get_task`
 - `list_tasks`
 - `update_task_state`
+- `list_workflow_states`
+- `list_blocked_tasks`
+- `list_blocker_tasks`
 - `append_changelog`
 - `get_workpad`
 - `upsert_workpad`
 - `add_comment`
 - `attach_pr`
 - `create_task`
+- `link_task_dependency`
+- `merge_duplicate_blocker_task`
 
 ## Status Map
 
@@ -103,6 +108,18 @@ Supported operations:
 - `Blocked` -> true blocker recorded; do not continue until unblocked.
 - `Done` -> terminal state; no further action required.
 
+## Blocker Reconciliation Agent
+
+If this task description or orchestration metadata has `symphony_kind = blocker_reconciliation_agent`, this is a meta orchestration task rather than product implementation:
+
+1. Run `pitchai_pm.list_blocked_tasks` first.
+2. Run `pitchai_pm.list_blocker_tasks` and compare existing canonical blocker tasks with the blocked-task snapshot.
+3. Use semantic judgment to unify equivalent blockers even when different blocked tasks describe the same root cause with different wording.
+4. For each distinct true blocker, reuse the best existing canonical blocker task or create one with `pitchai_pm.create_task` using `state_name = Suggested`, labels `["auto-blocker", "blocker", "symphony"]`, and metadata including `{"managed_by":"pitchai_symphony","symphony_kind":"blocker_task","blocker_key":"<stable-key>"}`.
+5. Use `pitchai_pm.link_task_dependency` so every blocked task depends on exactly the right canonical blocker task.
+6. Use `pitchai_pm.merge_duplicate_blocker_task` for duplicate blocker tasks. Keep the clearest task as canonical.
+7. Append a changelog summary to this reconciliation task and move it to `Done` only after the PM DB writes are complete.
+
 ## Required Start Sequence
 
 1. Fetch the task by explicit ID using `pitchai_pm`.
@@ -117,7 +134,7 @@ Supported operations:
 
 ## Merge Handling
 
-When the task state is `Merging`, open and follow `.codex/skills/land/SKILL.md`. Keep working until the PR is merged or a true blocker is recorded. After merge, call:
+When the task state is `Merging`, open and follow `.codex/skills/land/SKILL.md`. Do not call `gh pr merge` directly. Keep working until the PR is merged or a true blocker is recorded. After merge, call:
 
 ```json
 {"operation": "update_task_state", "params": {"task_id": "{{ issue.id }}", "state_name": "Done"}}

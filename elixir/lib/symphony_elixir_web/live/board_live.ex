@@ -680,7 +680,8 @@ defmodule SymphonyElixirWeb.BoardLive do
   defp visible_runtime_badge(_runtime_status), do: nil
 
   defp visible_labels(labels) when is_list(labels) do
-    hidden_labels = MapSet.new(["auto-blocker", "blocker", "symphony"])
+    hidden_labels =
+      MapSet.new(["auto-blocker", "blocker", "blocker-reconciliation", "meta-agent", "symphony"])
 
     Enum.reject(labels, &(String.downcase(to_string(&1)) in hidden_labels))
   end

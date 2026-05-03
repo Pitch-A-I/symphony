@@ -311,9 +311,11 @@ defmodule SymphonyElixir.Orchestrator do
     if Map.get(result, :created_blocker_tasks, 0) > 0 or
          Map.get(result, :reopened_blocker_tasks, 0) > 0 or
          Map.get(result, :merged_duplicate_blocker_tasks, 0) > 0 or
-         Map.get(result, :linked_dependencies, 0) > 0 do
+         Map.get(result, :linked_dependencies, 0) > 0 or
+         Map.get(result, :created_reconciliation_agent_tasks, 0) > 0 or
+         Map.get(result, :updated_reconciliation_agent_tasks, 0) > 0 do
       Logger.info(
-        "Reconciled PitchAI PM blockers: groups=#{Map.get(result, :groups, 0)} blocked_tasks=#{Map.get(result, :blocked_tasks, 0)} created=#{Map.get(result, :created_blocker_tasks, 0)} reopened=#{Map.get(result, :reopened_blocker_tasks, 0)} duplicates=#{Map.get(result, :merged_duplicate_blocker_tasks, 0)} linked=#{Map.get(result, :linked_dependencies, 0)}"
+        "Reconciled PitchAI PM blockers: groups=#{Map.get(result, :groups, 0)} blocked_tasks=#{Map.get(result, :blocked_tasks, 0)} created=#{Map.get(result, :created_blocker_tasks, 0)} reopened=#{Map.get(result, :reopened_blocker_tasks, 0)} duplicates=#{Map.get(result, :merged_duplicate_blocker_tasks, 0)} linked=#{Map.get(result, :linked_dependencies, 0)} reconciliation_agents_created=#{Map.get(result, :created_reconciliation_agent_tasks, 0)} reconciliation_agents_updated=#{Map.get(result, :updated_reconciliation_agent_tasks, 0)}"
       )
     end
   end
