@@ -21,6 +21,8 @@ defmodule SymphonyElixirWeb.BoardLive do
       |> assign(:create_task_form, nil)
       |> assign(:group_by, "project")
       |> assign(:show_hidden_columns, false)
+      |> assign(:board_reload_generation, 0)
+      |> assign(:board_reload_task, nil)
       |> assign(:forecast_state, BoardForecast.new_state())
       |> refresh_forecast()
 
@@ -40,7 +42,7 @@ defmodule SymphonyElixirWeb.BoardLive do
 
   @impl true
   def handle_event("open_task", %{"task_id" => task_id}, socket) do
-    case Presenter.board_task_detail(task_id, orchestrator(), snapshot_timeout_ms()) do
+    case Presenter.board_task_detail(task_id, current_runtime(socket)) do
       {:ok, detail} ->
         {:noreply, assign(socket, :selected_task, detail)}
 
@@ -150,12 +152,29 @@ defmodule SymphonyElixirWeb.BoardLive do
   @impl true
   def handle_info(:board_tick, socket) do
     schedule_board_tick()
-    {:noreply, reload_board(socket)}
+    {:noreply, start_async_board_reload(socket)}
   end
 
   @impl true
   def handle_info(:observability_updated, socket) do
-    {:noreply, reload_board(socket)}
+    {:noreply, start_async_board_reload(socket)}
+  end
+
+  @impl true
+  def handle_info({ref, {:board_payload, generation, payload}}, %{assigns: %{board_reload_task: %{ref: ref}}} = socket) do
+    Process.demonitor(ref, [:flush])
+
+    socket =
+      socket
+      |> assign(:board_reload_task, nil)
+      |> apply_async_board_payload(generation, payload)
+
+    {:noreply, socket}
+  end
+
+  @impl true
+  def handle_info({:DOWN, ref, :process, _pid, _reason}, %{assigns: %{board_reload_task: %{ref: ref}}} = socket) do
+    {:noreply, assign(socket, :board_reload_task, nil)}
   end
 
   @impl true
@@ -580,13 +599,14 @@ defmodule SymphonyElixirWeb.BoardLive do
 
   defp reload_board(socket) do
     socket
+    |> bump_board_reload_generation()
     |> assign(:payload, load_payload())
     |> refresh_forecast()
     |> refresh_selected_task()
   end
 
   defp refresh_selected_task(%{assigns: %{selected_task: %{id: task_id}}} = socket) when is_binary(task_id) do
-    case Presenter.board_task_detail(task_id, orchestrator(), snapshot_timeout_ms()) do
+    case Presenter.board_task_detail(task_id, current_runtime(socket)) do
       {:ok, detail} -> assign(socket, :selected_task, detail)
       {:error, _reason} -> assign(socket, :selected_task, nil)
     end
@@ -603,6 +623,41 @@ defmodule SymphonyElixirWeb.BoardLive do
     socket
     |> assign(:forecast_state, forecast_state)
     |> assign(:forecast, forecast)
+  end
+
+  defp start_async_board_reload(%{assigns: %{board_reload_task: %Task{}}} = socket), do: socket
+
+  defp start_async_board_reload(socket) do
+    generation = Map.get(socket.assigns, :board_reload_generation, 0)
+
+    task =
+      Task.Supervisor.async_nolink(SymphonyElixir.TaskSupervisor, fn ->
+        {:board_payload, generation, load_payload()}
+      end)
+
+    assign(socket, :board_reload_task, task)
+  end
+
+  defp apply_async_board_payload(socket, generation, payload) do
+    if generation == Map.get(socket.assigns, :board_reload_generation, 0) do
+      socket
+      |> assign(:payload, payload)
+      |> refresh_forecast()
+      |> refresh_selected_task()
+    else
+      socket
+    end
+  end
+
+  defp bump_board_reload_generation(socket) do
+    generation = Map.get(socket.assigns, :board_reload_generation, 0)
+    assign(socket, :board_reload_generation, generation + 1)
+  end
+
+  defp current_runtime(socket) do
+    socket.assigns
+    |> Map.get(:payload, %{})
+    |> Map.get(:runtime, %{})
   end
 
   defp orchestrator do

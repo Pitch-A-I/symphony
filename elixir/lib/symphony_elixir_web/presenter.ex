@@ -66,7 +66,11 @@ defmodule SymphonyElixirWeb.Presenter do
   @spec board_task_detail(String.t(), GenServer.name(), timeout()) :: {:ok, map()} | {:error, term()}
   def board_task_detail(task_id, orchestrator, snapshot_timeout_ms) when is_binary(task_id) do
     runtime = dashboard_payload(orchestrator, snapshot_timeout_ms)
+    board_task_detail(task_id, runtime)
+  end
 
+  @spec board_task_detail(String.t(), map()) :: {:ok, map()} | {:error, term()}
+  def board_task_detail(task_id, runtime) when is_binary(task_id) and is_map(runtime) do
     case Config.settings!().tracker.kind do
       "pitchai_pm" ->
         with {:ok, detail} <- pitchai_pm_client().task_detail(task_id) do
@@ -626,7 +630,9 @@ defmodule SymphonyElixirWeb.Presenter do
 
   defp blocked_reason(detail, sections) when is_map(detail) and is_list(sections) do
     if blocked_state?(Map.get(detail, :state)) do
-      latest_blocker_comment_body(Map.get(detail, :comments, [])) || blocker_section_text(sections)
+      clean_text(Map.get(detail, :blocked_reason)) ||
+        latest_blocker_comment_body(Map.get(detail, :comments, [])) ||
+        blocker_section_text(sections)
     end
   end
 
@@ -656,6 +662,15 @@ defmodule SymphonyElixirWeb.Presenter do
       cleaned_body
     end
   end
+
+  defp clean_text(value) when is_binary(value) do
+    case String.trim(value) do
+      "" -> nil
+      text -> text
+    end
+  end
+
+  defp clean_text(_value), do: nil
 
   defp blocker_section_text(sections) do
     sections

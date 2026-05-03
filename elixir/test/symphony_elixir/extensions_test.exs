@@ -407,6 +407,10 @@ defmodule SymphonyElixir.ExtensionsTest do
     def init(opts), do: {:ok, opts}
 
     def handle_call(:snapshot, _from, state) do
+      if recipient = Keyword.get(state, :recipient) do
+        send(recipient, :snapshot_requested)
+      end
+
       {:reply, Keyword.fetch!(state, :snapshot), state}
     end
 
@@ -1047,6 +1051,35 @@ defmodule SymphonyElixir.ExtensionsTest do
     assert rendered =~ "Group"
   end
 
+  test "kanban issue detail opens reuse current runtime instead of taking a new orchestrator snapshot" do
+    orchestrator_name = Module.concat(__MODULE__, :BoardDetailRuntimeOrchestrator)
+    Application.put_env(:symphony_elixir, :pitchai_pm_client_module, FakePitchAIPMClient)
+
+    write_workflow_file!(Workflow.workflow_file_path(),
+      tracker_kind: "pitchai_pm",
+      tracker_project_id: "project-pm",
+      tracker_database_url: "postgresql://postgres:postgres@127.0.0.1:5432/test"
+    )
+
+    {:ok, _pid} =
+      StaticOrchestrator.start_link(
+        name: orchestrator_name,
+        snapshot: static_snapshot(),
+        recipient: self()
+      )
+
+    start_test_endpoint(orchestrator: orchestrator_name, snapshot_timeout_ms: 50)
+    {:ok, view, _html} = live(build_conn(), "/")
+
+    flush_snapshot_requests()
+
+    detail = render_click(view, "open_task", %{"task_id" => "issue-http"})
+
+    assert detail =~ "Agent progress"
+    assert detail =~ "Dispatch active PM task"
+    refute_receive :snapshot_requested, 50
+  end
+
   test "kanban board applies persisted collapsed project groups" do
     orchestrator_name = Module.concat(__MODULE__, :CollapsedBoardOrchestrator)
     Application.put_env(:symphony_elixir, :pitchai_pm_client_module, FakePitchAIPMClient)
@@ -1275,6 +1308,14 @@ defmodule SymphonyElixir.ExtensionsTest do
       codex_totals: %{input_tokens: 4, output_tokens: 8, total_tokens: 12, seconds_running: 42.5},
       rate_limits: %{"primary" => %{"remaining" => 11}}
     }
+  end
+
+  defp flush_snapshot_requests do
+    receive do
+      :snapshot_requested -> flush_snapshot_requests()
+    after
+      0 -> :ok
+    end
   end
 
   defp wait_for_bound_port do

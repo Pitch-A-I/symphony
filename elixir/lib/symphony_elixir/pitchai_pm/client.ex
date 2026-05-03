@@ -293,6 +293,15 @@ defmodule SymphonyElixir.PitchAIPM.Client do
       tr.metadata::text as tracking_metadata_json,
       w.body as workpad_body,
       w.updated_at as workpad_updated_at,
+      (
+        select c.body
+        from pitchai_symphony.task_comments c
+        where c.task_id = t.id
+          and lower(trim(coalesce(t.state_name, ''))) = 'blocked'
+          and lower(trim(coalesce(c.body, ''))) like any(array['blocked%', 'true blocker%'])
+        order by c.created_at desc, c.id desc
+        limit 1
+      ) as blocked_reason,
       coalesce(
         (
           select jsonb_agg(
@@ -306,8 +315,13 @@ defmodule SymphonyElixir.PitchAIPM.Client do
             )
             order by c.created_at desc, c.id desc
           )
-          from pitchai_symphony.task_comments c
-          where c.task_id = t.id
+          from (
+            select c.*
+            from pitchai_symphony.task_comments c
+            where c.task_id = t.id
+            order by c.created_at desc, c.id desc
+            limit 50
+          ) c
         ),
         '[]'::jsonb
       )::text as comments_json,
@@ -326,8 +340,13 @@ defmodule SymphonyElixir.PitchAIPM.Client do
             )
             order by pr.updated_at desc, pr.id desc
           )
-          from pitchai_symphony.task_pr_links pr
-          where pr.task_id = t.id
+          from (
+            select pr.*
+            from pitchai_symphony.task_pr_links pr
+            where pr.task_id = t.id
+            order by pr.updated_at desc, pr.id desc
+            limit 20
+          ) pr
         ),
         '[]'::jsonb
       )::text as prs_json,
@@ -345,8 +364,13 @@ defmodule SymphonyElixir.PitchAIPM.Client do
             )
             order by e.created_at desc, e.id desc
           )
-          from pitchai_symphony.task_state_events e
-          where e.task_id = t.id
+          from (
+            select e.*
+            from pitchai_symphony.task_state_events e
+            where e.task_id = t.id
+            order by e.created_at desc, e.id desc
+            limit 20
+          ) e
         ),
         '[]'::jsonb
       )::text as state_events_json,
@@ -1344,9 +1368,11 @@ defmodule SymphonyElixir.PitchAIPM.Client do
                 on dep.blocker_task_id = d.dependent_id
                and dep.relation_type = 'blocked_by'
             )
-            select count(distinct dependent_id)::integer
-            from downstream
-            where dependent_id <> t.id
+            select count(distinct d.dependent_id)::integer
+            from downstream d
+            join public.tasks dependent on dependent.id = d.dependent_id
+            where d.dependent_id <> t.id
+              and not (lower(trim(coalesce(dependent.state_name, ''))) = any($4::text[]))
           ),
           0
         ) as downstream_count,
@@ -1364,7 +1390,9 @@ defmodule SymphonyElixir.PitchAIPM.Client do
     order by lower(state), board_rank
     """
 
-    with {:ok, result} <- query(sql, [project_id, scope_project_ids, @board_task_limit_per_state]) do
+    params = [project_id, scope_project_ids, @board_task_limit_per_state, terminal_state_keys()]
+
+    with {:ok, result} <- query(sql, params) do
       {:ok, Enum.map(result.rows, &board_task_row_to_map(result.columns, &1))}
     end
   end
@@ -1774,6 +1802,7 @@ defmodule SymphonyElixir.PitchAIPM.Client do
       repo_url: clean_string(data["repo_url"]),
       workspace_path: clean_string(data["workspace_path"]),
       tracking_metadata: decode_json_object(data["tracking_metadata_json"]),
+      blocked_reason: clean_string(data["blocked_reason"]),
       project: %{
         id: data["project_id"],
         name: data["project_name"]

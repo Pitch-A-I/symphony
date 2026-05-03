@@ -118,7 +118,17 @@ defmodule SymphonyElixirWeb.Layouts do
                   event.preventDefault();
                   event.stopPropagation();
                   card.removeAttribute("data-suppress-click");
+                  return;
                 }
+
+                if (event.target.closest("a, button, input, select, textarea")) return;
+
+                var taskId = card.getAttribute("data-task-id");
+                if (!taskId) return;
+
+                event.preventDefault();
+                event.stopPropagation();
+                this.pushEvent("open_task", {task_id: taskId});
               },
 
               startDrag: function (event) {
