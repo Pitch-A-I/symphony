@@ -961,6 +961,14 @@ body.is-kanban-dragging {
   gap: 0.55rem;
 }
 
+.runtime-events {
+  max-height: 13.5rem;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding-right: 0.32rem;
+  scrollbar-gutter: stable;
+}
+
 .runtime-events strong,
 .state-events span {
   display: block;

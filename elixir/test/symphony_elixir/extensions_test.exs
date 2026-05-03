@@ -710,6 +710,8 @@ defmodule SymphonyElixir.ExtensionsTest do
     assert dashboard_css =~ ".is-drag-origin-card"
     assert dashboard_css =~ ".detail-modal"
     assert dashboard_css =~ ".checklist-item"
+    assert dashboard_css =~ ".runtime-events"
+    assert dashboard_css =~ "scrollbar-gutter: stable"
     assert dashboard_css =~ ".terminal-frame"
     assert dashboard_css =~ ".terminal-running-table"
 

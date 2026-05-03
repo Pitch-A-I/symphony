@@ -348,7 +348,7 @@ defmodule SymphonyElixirWeb.BoardLive do
           <section class="detail-side-section">
             <h3>Recent app-server events</h3>
             <div :if={@task.runtime && @task.runtime.recent_events != []} class="runtime-events">
-              <div :for={event <- Enum.take(@task.runtime.recent_events, 6)}>
+              <div :for={event <- @task.runtime.recent_events}>
                 <span><%= format_updated(event.at) %></span>
                 <strong><%= event.message || event.method || event.event %></strong>
               </div>
