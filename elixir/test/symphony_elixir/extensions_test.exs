@@ -39,6 +39,178 @@ defmodule SymphonyElixir.ExtensionsTest do
     end
   end
 
+  defmodule FakePitchAIPMClient do
+    def move_issue_on_board(task_id, state_name, opts) do
+      if recipient = Application.get_env(:symphony_elixir, :pitchai_pm_test_recipient) do
+        send(recipient, {:pitchai_pm_move_issue_on_board, task_id, state_name, opts})
+      end
+
+      :ok
+    end
+
+    def board_snapshot do
+      {:ok,
+       %{
+         project: %{id: "project-pm", name: "TODO App"},
+         task_limit_per_column: 12,
+         columns: [
+           %{
+             state_name: "Suggested",
+             color: "#8b5cf6",
+             task_count: 1,
+             hidden?: false,
+             tasks: [
+               %{
+                 id: "issue-suggested",
+                 identifier: "MT-SUG",
+                 title: "Summarize feedback from Slack",
+                 state: "Suggested",
+                 value_name: "Task",
+                 priority: 4,
+                 rank: 1024.0,
+                 labels: ["demo"],
+                 branch_name: nil,
+                 url: "",
+                 updated_at: "2026-05-02T12:00:00Z",
+                 created_at: "2026-05-01T12:00:00Z",
+                 comment_count: 1,
+                 pr_count: 0,
+                 workpad_updated_at: nil
+               }
+             ]
+           },
+           %{
+             state_name: "Todo",
+             color: "#9ca3af",
+             task_count: 1,
+             hidden?: false,
+             tasks: [
+               %{
+                 id: "issue-todo",
+                 identifier: "MT-890",
+                 title: "Upgrade to latest React version",
+                 state: "Todo",
+                 value_name: "Task",
+                 priority: 5,
+                 rank: 1024.0,
+                 labels: [],
+                 branch_name: nil,
+                 url: "",
+                 updated_at: "2026-05-02T12:00:00Z",
+                 created_at: "2026-05-01T12:00:00Z",
+                 comment_count: 0,
+                 pr_count: 0,
+                 workpad_updated_at: nil
+               }
+             ]
+           },
+           %{
+             state_name: "In Progress",
+             color: "#facc15",
+             task_count: 1,
+             hidden?: false,
+             tasks: [
+               %{
+                 id: "issue-http",
+                 identifier: "MT-HTTP",
+                 title: "Dispatch active PM task",
+                 state: "In Progress",
+                 value_name: "Task",
+                 priority: 3,
+                 rank: 1024.0,
+                 labels: [],
+                 branch_name: nil,
+                 url: "",
+                 updated_at: "2026-05-02T12:00:00Z",
+                 created_at: "2026-05-01T12:00:00Z",
+                 comment_count: 0,
+                 pr_count: 0,
+                 workpad_updated_at: nil
+               }
+             ]
+           },
+           %{
+             state_name: "Human Review",
+             color: "#e85d8e",
+             task_count: 0,
+             hidden?: false,
+             tasks: []
+           }
+         ],
+         hidden_columns: [
+           %{state_name: "Rework", color: "#dc2626", task_count: 0, hidden?: true, tasks: []},
+           %{state_name: "Merging", color: "#059669", task_count: 0, hidden?: true, tasks: []},
+           %{state_name: "Done", color: "#6366f1", task_count: 12, hidden?: true, tasks: []}
+         ]
+       }}
+    end
+
+    def task_detail("issue-http") do
+      {:ok,
+       %{
+         id: "issue-http",
+         identifier: "MT-HTTP",
+         title: "Dispatch active PM task",
+         description: %{"request" => "Render agent progress like the Symphony demo."},
+         state: "In Progress",
+         value_name: "Task",
+         rank: 1024.0,
+         priority: 3,
+         labels: ["symphony"],
+         branch_name: "feature/detail-modal",
+         url: "",
+         assignee: "symphony",
+         repo_full_name: "pitchai/dispatch",
+         repo_url: "https://example.invalid/pitchai/dispatch",
+         workspace_path: "/tmp/workspaces/MT-HTTP",
+         tracking_metadata: %{},
+         project: %{id: "project-pm", name: "TODO App"},
+         workpad: %{
+           body: """
+           ## Codex Workpad
+
+           ### Plan
+
+           - [x] 1. Inspect the current board
+             - [x] 1.1 Locate the LiveView card renderer
+           - [ ] 2. Add a task detail modal
+             - [ ] 2.1 Render nested checkboxes
+
+           ### Acceptance Criteria
+
+           - [x] Opening a card shows details
+           - [ ] Agent progress is visible
+
+           ### Validation
+
+           - [ ] Run LiveView tests
+
+           ### Notes
+
+           - Keep the interaction close to the Symphony demo.
+           """,
+           updated_at: "2026-05-02T12:00:00Z"
+         },
+         comments: [],
+         prs: [],
+         state_events: [
+           %{
+             "from_state" => "Todo",
+             "to_state" => "In Progress",
+             "actor" => "symphony",
+             "reason" => "dispatch",
+             "created_at" => "2026-05-02T12:00:00Z"
+           }
+         ],
+         blockers: [],
+         created_at: "2026-05-01T12:00:00Z",
+         updated_at: "2026-05-02T12:00:00Z"
+       }}
+    end
+
+    def task_detail(_task_id), do: {:error, :task_not_found}
+  end
+
   defmodule SlowOrchestrator do
     use GenServer
 
@@ -79,12 +251,26 @@ defmodule SymphonyElixir.ExtensionsTest do
 
   setup do
     linear_client_module = Application.get_env(:symphony_elixir, :linear_client_module)
+    pitchai_pm_client_module = Application.get_env(:symphony_elixir, :pitchai_pm_client_module)
+    pitchai_pm_test_recipient = Application.get_env(:symphony_elixir, :pitchai_pm_test_recipient)
 
     on_exit(fn ->
       if is_nil(linear_client_module) do
         Application.delete_env(:symphony_elixir, :linear_client_module)
       else
         Application.put_env(:symphony_elixir, :linear_client_module, linear_client_module)
+      end
+
+      if is_nil(pitchai_pm_client_module) do
+        Application.delete_env(:symphony_elixir, :pitchai_pm_client_module)
+      else
+        Application.put_env(:symphony_elixir, :pitchai_pm_client_module, pitchai_pm_client_module)
+      end
+
+      if is_nil(pitchai_pm_test_recipient) do
+        Application.delete_env(:symphony_elixir, :pitchai_pm_test_recipient)
+      else
+        Application.put_env(:symphony_elixir, :pitchai_pm_test_recipient, pitchai_pm_test_recipient)
       end
     end)
 
@@ -354,6 +540,9 @@ defmodule SymphonyElixir.ExtensionsTest do
                  "turn_count" => 7,
                  "last_event" => "notification",
                  "last_message" => "rendered",
+                 "plan" => [],
+                 "recent_events" => [],
+                 "runtime_seconds" => nil,
                  "started_at" => state_payload["running"] |> List.first() |> Map.fetch!("started_at"),
                  "last_event_at" => nil,
                  "tokens" => %{"input_tokens" => 4, "output_tokens" => 8, "total_tokens" => 12}
@@ -400,6 +589,9 @@ defmodule SymphonyElixir.ExtensionsTest do
                "started_at" => issue_payload["running"]["started_at"],
                "last_event" => "notification",
                "last_message" => "rendered",
+               "plan" => [],
+               "recent_events" => [],
+               "runtime_seconds" => nil,
                "last_event_at" => nil,
                "tokens" => %{"input_tokens" => 4, "output_tokens" => 8, "total_tokens" => 12}
              },
@@ -479,6 +671,13 @@ defmodule SymphonyElixir.ExtensionsTest do
 
   test "dashboard bootstraps liveview from embedded static assets" do
     orchestrator_name = Module.concat(__MODULE__, :AssetOrchestrator)
+    Application.put_env(:symphony_elixir, :pitchai_pm_client_module, FakePitchAIPMClient)
+
+    write_workflow_file!(Workflow.workflow_file_path(),
+      tracker_kind: "pitchai_pm",
+      tracker_project_id: "project-pm",
+      tracker_database_url: "postgresql://postgres:postgres@127.0.0.1:5432/test"
+    )
 
     {:ok, _pid} =
       StaticOrchestrator.start_link(
@@ -504,9 +703,15 @@ defmodule SymphonyElixir.ExtensionsTest do
 
     dashboard_css = response(get(build_conn(), "/dashboard.css"), 200)
     assert dashboard_css =~ ":root {"
-    assert dashboard_css =~ ".status-badge-live"
-    assert dashboard_css =~ "[data-phx-main].phx-connected .status-badge-live"
-    assert dashboard_css =~ "[data-phx-main].phx-connected .status-badge-offline"
+    assert dashboard_css =~ ".board-columns"
+    assert dashboard_css =~ ".ticket-card"
+    assert dashboard_css =~ ".state-spinner"
+    assert dashboard_css =~ ".drag-placeholder"
+    assert dashboard_css =~ ".is-drag-origin-card"
+    assert dashboard_css =~ ".detail-modal"
+    assert dashboard_css =~ ".checklist-item"
+    assert dashboard_css =~ ".terminal-frame"
+    assert dashboard_css =~ ".terminal-running-table"
 
     phoenix_html_js = response(get(build_conn(), "/vendor/phoenix_html/phoenix_html.js"), 200)
     assert phoenix_html_js =~ "phoenix.link.click"
@@ -520,7 +725,67 @@ defmodule SymphonyElixir.ExtensionsTest do
     assert live_view_js =~ "var LiveView = (() => {"
   end
 
-  test "dashboard liveview renders and refreshes over pubsub" do
+  test "kanban board liveview renders PM ticket columns" do
+    orchestrator_name = Module.concat(__MODULE__, :BoardOrchestrator)
+    Application.put_env(:symphony_elixir, :pitchai_pm_client_module, FakePitchAIPMClient)
+
+    write_workflow_file!(Workflow.workflow_file_path(),
+      tracker_kind: "pitchai_pm",
+      tracker_project_id: "project-pm",
+      tracker_database_url: "postgresql://postgres:postgres@127.0.0.1:5432/test"
+    )
+
+    {:ok, _pid} =
+      StaticOrchestrator.start_link(
+        name: orchestrator_name,
+        snapshot: static_snapshot(),
+        refresh: %{
+          queued: true,
+          coalesced: true,
+          requested_at: DateTime.utc_now(),
+          operations: ["poll"]
+        }
+      )
+
+    start_test_endpoint(orchestrator: orchestrator_name, snapshot_timeout_ms: 50)
+
+    {:ok, view, html} = live(build_conn(), "/")
+    assert html =~ "TODO App / Issues"
+    assert html =~ "Suggested"
+    refute html =~ "Backlog"
+    assert html =~ "Todo"
+    assert html =~ "In Progress"
+    assert html =~ "Human Review"
+    assert html =~ "Hidden columns"
+    assert html =~ "Rework"
+    assert html =~ "Merging"
+    assert html =~ "Done"
+    assert html =~ "state-spinner"
+    assert html =~ "data-drop-state=\"Todo\""
+    assert html =~ "MT-HTTP"
+    assert html =~ "Dispatch active PM task"
+    assert html =~ "Active"
+    assert html =~ "MT-890"
+    refute html =~ "SYMPHONY STATUS"
+
+    detail = render_click(view, "open_task", %{"task_id" => "issue-http"})
+    assert detail =~ "Agent progress"
+    assert detail =~ "Render agent progress like the Symphony demo."
+    assert detail =~ "Inspect the current board"
+    assert detail =~ "Render nested checkboxes"
+    assert detail =~ "Acceptance Criteria"
+    assert detail =~ "State history"
+
+    Application.put_env(:symphony_elixir, :pitchai_pm_test_recipient, self())
+    render_hook(view, "move_task", %{"task_id" => "issue-todo", "target_state" => "Human Review"})
+
+    assert_receive {:pitchai_pm_move_issue_on_board, "issue-todo", "Human Review", %{after_task_id: nil, before_task_id: nil, reason: "kanban_drag_drop"}}
+
+    rendered = render_click(view, "refresh")
+    assert rendered =~ "TODO App / Issues"
+  end
+
+  test "status liveview renders and refreshes over pubsub" do
     orchestrator_name = Module.concat(__MODULE__, :DashboardOrchestrator)
     snapshot = static_snapshot()
 
@@ -538,22 +803,19 @@ defmodule SymphonyElixir.ExtensionsTest do
 
     start_test_endpoint(orchestrator: orchestrator_name, snapshot_timeout_ms: 50)
 
-    {:ok, view, html} = live(build_conn(), "/")
-    assert html =~ "Operations Dashboard"
+    {:ok, view, html} = live(build_conn(), "/status")
+    assert html =~ "SYMPHONY STATUS"
     assert html =~ "MT-HTTP"
     assert html =~ "MT-RETRY"
     assert html =~ "rendered"
     assert html =~ "Runtime"
-    assert html =~ "Live"
-    assert html =~ "Offline"
-    assert html =~ "Copy ID"
-    assert html =~ "Codex update"
+    assert html =~ "Backoff queue"
+    assert html =~ "EVENT"
     refute html =~ "data-runtime-clock="
     refute html =~ "setInterval(refreshRuntimeClocks"
     refute html =~ "Refresh now"
     refute html =~ "Transport"
-    assert html =~ "status-badge-live"
-    assert html =~ "status-badge-offline"
+    assert html =~ "terminal-running-table"
 
     updated_snapshot =
       put_in(snapshot.running, [
@@ -602,7 +864,7 @@ defmodule SymphonyElixir.ExtensionsTest do
       snapshot_timeout_ms: 5
     )
 
-    {:ok, _view, html} = live(build_conn(), "/")
+    {:ok, _view, html} = live(build_conn(), "/status")
     assert html =~ "Snapshot unavailable"
     assert html =~ "snapshot_unavailable"
   end

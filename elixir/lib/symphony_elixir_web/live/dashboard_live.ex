@@ -40,217 +40,158 @@ defmodule SymphonyElixirWeb.DashboardLive do
   @impl true
   def render(assigns) do
     ~H"""
-    <section class="dashboard-shell">
-      <header class="hero-card">
-        <div class="hero-grid">
-          <div>
-            <p class="eyebrow">
-              Symphony Observability
-            </p>
-            <h1 class="hero-title">
-              Operations Dashboard
-            </h1>
-            <p class="hero-copy">
-              Current state, retry pressure, token usage, and orchestration health for the active Symphony runtime.
-            </p>
+    <section class="terminal-page">
+      <div class="terminal-scroll" role="region" aria-label="Symphony status terminal">
+        <div class="terminal-frame">
+          <div class="terminal-topline">
+            <div class="terminal-line terminal-title">
+              <span class="terminal-rail">╭─</span>
+              <span>SYMPHONY STATUS</span>
+            </div>
           </div>
 
-          <div class="status-stack">
-            <span class="status-badge status-badge-live">
-              <span class="status-badge-dot"></span>
-              Live
-            </span>
-            <span class="status-badge status-badge-offline">
-              <span class="status-badge-dot"></span>
-              Offline
-            </span>
-          </div>
+          <%= if @payload[:error] do %>
+            <div class="terminal-line">
+              <span class="terminal-rail">│</span>
+              <span class="terminal-error">Orchestrator snapshot unavailable</span>
+            </div>
+            <div class="terminal-line">
+              <span class="terminal-rail">│</span>
+              <span class="terminal-label">Reason:</span>
+              <span class="terminal-error"><%= @payload.error.code %>: <%= @payload.error.message %></span>
+            </div>
+            <div class="terminal-line">
+              <span class="terminal-rail">│</span>
+              <span class="terminal-label">Next refresh:</span>
+              <span class="terminal-cyan">live</span>
+            </div>
+            <div class="terminal-line terminal-title">
+              <span class="terminal-rail">╰─</span>
+            </div>
+          <% else %>
+            <div class="terminal-line">
+              <span class="terminal-rail">│</span>
+              <span class="terminal-label">Agents:</span>
+              <span class="terminal-green"><%= @payload.counts.running %></span><span class="terminal-muted">/</span><span class="terminal-muted"><%= @payload.max_agents %></span>
+            </div>
+            <div class="terminal-line">
+              <span class="terminal-rail">│</span>
+              <span class="terminal-label">Throughput:</span>
+              <span class="terminal-cyan">0 tps</span>
+            </div>
+            <div class="terminal-line">
+              <span class="terminal-rail">│</span>
+              <span class="terminal-label">Runtime:</span>
+              <span class="terminal-magenta"><%= format_runtime_seconds(total_runtime_seconds(@payload, @now)) %></span>
+            </div>
+            <div class="terminal-line">
+              <span class="terminal-rail">│</span>
+              <span class="terminal-label">Tokens:</span>
+              <span class="terminal-yellow">in <%= format_int(@payload.codex_totals.input_tokens) %></span>
+              <span class="terminal-muted"> | </span>
+              <span class="terminal-yellow">out <%= format_int(@payload.codex_totals.output_tokens) %></span>
+              <span class="terminal-muted"> | </span>
+              <span class="terminal-yellow">total <%= format_int(@payload.codex_totals.total_tokens) %></span>
+            </div>
+            <div class="terminal-line">
+              <span class="terminal-rail">│</span>
+              <span class="terminal-label">Rate Limits:</span>
+              <span class="terminal-muted"><%= format_rate_limits(@payload.rate_limits) %></span>
+            </div>
+            <div class="terminal-line">
+              <span class="terminal-rail">│</span>
+              <span class="terminal-label">Project:</span>
+              <span class="terminal-cyan"><%= @payload.tracker.label %></span>
+            </div>
+            <div class="terminal-line">
+              <span class="terminal-rail">│</span>
+              <span class="terminal-label">Next refresh:</span>
+              <span class="terminal-cyan"><%= format_next_refresh(@payload.polling) %></span>
+            </div>
+
+            <div class="terminal-line terminal-section-title">
+              <span class="terminal-rail">├─</span>
+              <span>Running</span>
+            </div>
+            <div class="terminal-line"><span class="terminal-rail">│</span></div>
+
+            <table class="terminal-table terminal-running-table">
+              <thead>
+                <tr>
+                  <th>ID</th>
+                  <th>STAGE</th>
+                  <th>PID</th>
+                  <th>AGE / TURN</th>
+                  <th>TOKENS</th>
+                  <th>SESSION</th>
+                  <th>EVENT</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr :for={entry <- @payload.running}>
+                  <td>
+                    <span class="terminal-dot"></span>
+                    <a class="terminal-link" href={"/api/v1/#{entry.issue_identifier}"}>
+                      <%= entry.issue_identifier %>
+                    </a>
+                  </td>
+                  <td class={stage_class(entry.state)}><%= entry.state || "unknown" %></td>
+                  <td class="terminal-yellow"><%= entry.codex_app_server_pid || "n/a" %></td>
+                  <td class="terminal-magenta"><%= format_runtime_and_turns(entry.started_at, entry.turn_count, @now) %></td>
+                  <td class="terminal-yellow terminal-number"><%= format_int(entry.tokens.total_tokens) %></td>
+                  <td class="terminal-cyan"><%= compact_session(entry.session_id) %></td>
+                  <td class={event_class(entry.last_event)}><%= event_text(entry) %></td>
+                </tr>
+              </tbody>
+            </table>
+
+            <%= if @payload.running == [] do %>
+              <div class="terminal-line">
+                <span class="terminal-rail">│</span>
+                <span class="terminal-indent terminal-muted">No active agents</span>
+              </div>
+              <div class="terminal-line"><span class="terminal-rail">│</span></div>
+            <% else %>
+              <div class="terminal-line"><span class="terminal-rail">│</span></div>
+            <% end %>
+
+            <div class="terminal-line terminal-section-title">
+              <span class="terminal-rail">├─</span>
+              <span>Backoff queue</span>
+            </div>
+            <div class="terminal-line"><span class="terminal-rail">│</span></div>
+
+            <%= if @payload.retrying == [] do %>
+              <div class="terminal-line">
+                <span class="terminal-rail">│</span>
+                <span class="terminal-indent terminal-muted">No queued retries</span>
+              </div>
+            <% else %>
+              <div :for={entry <- @payload.retrying} class="terminal-line">
+                <span class="terminal-rail">│</span>
+                <span class="terminal-indent terminal-orange">↻</span>
+                <a class="terminal-link terminal-error" href={"/api/v1/#{entry.issue_identifier}"}>
+                  <%= entry.issue_identifier %>
+                </a>
+                <span class="terminal-yellow">attempt=<%= entry.attempt %></span>
+                <span class="terminal-muted">in</span>
+                <span class="terminal-cyan"><%= next_in_words(entry.due_in_ms) %></span>
+                <span class="terminal-muted"><%= retry_error(entry.error) %></span>
+              </div>
+            <% end %>
+
+            <div class="terminal-line terminal-title">
+              <span class="terminal-rail">╰─</span>
+            </div>
+          <% end %>
         </div>
-      </header>
-
-      <%= if @payload[:error] do %>
-        <section class="error-card">
-          <h2 class="error-title">
-            Snapshot unavailable
-          </h2>
-          <p class="error-copy">
-            <strong><%= @payload.error.code %>:</strong> <%= @payload.error.message %>
-          </p>
-        </section>
-      <% else %>
-        <section class="metric-grid">
-          <article class="metric-card">
-            <p class="metric-label">Running</p>
-            <p class="metric-value numeric"><%= @payload.counts.running %></p>
-            <p class="metric-detail">Active issue sessions in the current runtime.</p>
-          </article>
-
-          <article class="metric-card">
-            <p class="metric-label">Retrying</p>
-            <p class="metric-value numeric"><%= @payload.counts.retrying %></p>
-            <p class="metric-detail">Issues waiting for the next retry window.</p>
-          </article>
-
-          <article class="metric-card">
-            <p class="metric-label">Total tokens</p>
-            <p class="metric-value numeric"><%= format_int(@payload.codex_totals.total_tokens) %></p>
-            <p class="metric-detail numeric">
-              In <%= format_int(@payload.codex_totals.input_tokens) %> / Out <%= format_int(@payload.codex_totals.output_tokens) %>
-            </p>
-          </article>
-
-          <article class="metric-card">
-            <p class="metric-label">Runtime</p>
-            <p class="metric-value numeric"><%= format_runtime_seconds(total_runtime_seconds(@payload, @now)) %></p>
-            <p class="metric-detail">Total Codex runtime across completed and active sessions.</p>
-          </article>
-        </section>
-
-        <section class="section-card">
-          <div class="section-header">
-            <div>
-              <h2 class="section-title">Rate limits</h2>
-              <p class="section-copy">Latest upstream rate-limit snapshot, when available.</p>
-            </div>
-          </div>
-
-          <pre class="code-panel"><%= pretty_value(@payload.rate_limits) %></pre>
-        </section>
-
-        <section class="section-card">
-          <div class="section-header">
-            <div>
-              <h2 class="section-title">Running sessions</h2>
-              <p class="section-copy">Active issues, last known agent activity, and token usage.</p>
-            </div>
-          </div>
-
-          <%= if @payload.running == [] do %>
-            <p class="empty-state">No active sessions.</p>
-          <% else %>
-            <div class="table-wrap">
-              <table class="data-table data-table-running">
-                <colgroup>
-                  <col style="width: 12rem;" />
-                  <col style="width: 8rem;" />
-                  <col style="width: 7.5rem;" />
-                  <col style="width: 8.5rem;" />
-                  <col />
-                  <col style="width: 10rem;" />
-                </colgroup>
-                <thead>
-                  <tr>
-                    <th>Issue</th>
-                    <th>State</th>
-                    <th>Session</th>
-                    <th>Runtime / turns</th>
-                    <th>Codex update</th>
-                    <th>Tokens</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  <tr :for={entry <- @payload.running}>
-                    <td>
-                      <div class="issue-stack">
-                        <span class="issue-id"><%= entry.issue_identifier %></span>
-                        <a class="issue-link" href={"/api/v1/#{entry.issue_identifier}"}>JSON details</a>
-                      </div>
-                    </td>
-                    <td>
-                      <span class={state_badge_class(entry.state)}>
-                        <%= entry.state %>
-                      </span>
-                    </td>
-                    <td>
-                      <div class="session-stack">
-                        <%= if entry.session_id do %>
-                          <button
-                            type="button"
-                            class="subtle-button"
-                            data-label="Copy ID"
-                            data-copy={entry.session_id}
-                            onclick="navigator.clipboard.writeText(this.dataset.copy); this.textContent = 'Copied'; clearTimeout(this._copyTimer); this._copyTimer = setTimeout(() => { this.textContent = this.dataset.label }, 1200);"
-                          >
-                            Copy ID
-                          </button>
-                        <% else %>
-                          <span class="muted">n/a</span>
-                        <% end %>
-                      </div>
-                    </td>
-                    <td class="numeric"><%= format_runtime_and_turns(entry.started_at, entry.turn_count, @now) %></td>
-                    <td>
-                      <div class="detail-stack">
-                        <span
-                          class="event-text"
-                          title={entry.last_message || to_string(entry.last_event || "n/a")}
-                        ><%= entry.last_message || to_string(entry.last_event || "n/a") %></span>
-                        <span class="muted event-meta">
-                          <%= entry.last_event || "n/a" %>
-                          <%= if entry.last_event_at do %>
-                            · <span class="mono numeric"><%= entry.last_event_at %></span>
-                          <% end %>
-                        </span>
-                      </div>
-                    </td>
-                    <td>
-                      <div class="token-stack numeric">
-                        <span>Total: <%= format_int(entry.tokens.total_tokens) %></span>
-                        <span class="muted">In <%= format_int(entry.tokens.input_tokens) %> / Out <%= format_int(entry.tokens.output_tokens) %></span>
-                      </div>
-                    </td>
-                  </tr>
-                </tbody>
-              </table>
-            </div>
-          <% end %>
-        </section>
-
-        <section class="section-card">
-          <div class="section-header">
-            <div>
-              <h2 class="section-title">Retry queue</h2>
-              <p class="section-copy">Issues waiting for the next retry window.</p>
-            </div>
-          </div>
-
-          <%= if @payload.retrying == [] do %>
-            <p class="empty-state">No issues are currently backing off.</p>
-          <% else %>
-            <div class="table-wrap">
-              <table class="data-table" style="min-width: 680px;">
-                <thead>
-                  <tr>
-                    <th>Issue</th>
-                    <th>Attempt</th>
-                    <th>Due at</th>
-                    <th>Error</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  <tr :for={entry <- @payload.retrying}>
-                    <td>
-                      <div class="issue-stack">
-                        <span class="issue-id"><%= entry.issue_identifier %></span>
-                        <a class="issue-link" href={"/api/v1/#{entry.issue_identifier}"}>JSON details</a>
-                      </div>
-                    </td>
-                    <td><%= entry.attempt %></td>
-                    <td class="mono"><%= entry.due_at || "n/a" %></td>
-                    <td><%= entry.error || "n/a" %></td>
-                  </tr>
-                </tbody>
-              </table>
-            </div>
-          <% end %>
-        </section>
-      <% end %>
+      </div>
     </section>
     """
   end
 
   defp load_payload do
-    Presenter.state_payload(orchestrator(), snapshot_timeout_ms())
+    Presenter.dashboard_payload(orchestrator(), snapshot_timeout_ms())
   end
 
   defp orchestrator do
@@ -307,24 +248,71 @@ defmodule SymphonyElixirWeb.DashboardLive do
     |> String.reverse()
   end
 
-  defp format_int(_value), do: "n/a"
+  defp format_int(value) when is_float(value), do: value |> trunc() |> format_int()
+  defp format_int(_value), do: "0"
 
-  defp state_badge_class(state) do
-    base = "state-badge"
-    normalized = state |> to_string() |> String.downcase()
+  defp format_rate_limits(nil), do: "codex | primary n/a | secondary n/a | credits n/a"
+  defp format_rate_limits(value), do: inspect(value, pretty: false, limit: 8)
 
-    cond do
-      String.contains?(normalized, ["progress", "running", "active"]) -> "#{base} state-badge-active"
-      String.contains?(normalized, ["blocked", "error", "failed"]) -> "#{base} state-badge-danger"
-      String.contains?(normalized, ["todo", "queued", "pending", "retry"]) -> "#{base} state-badge-warning"
-      true -> base
+  defp format_next_refresh(%{checking?: true}), do: "checking now..."
+
+  defp format_next_refresh(%{next_poll_in_ms: due_in_ms}) when is_integer(due_in_ms) do
+    seconds = div(max(due_in_ms, 0) + 999, 1000)
+    "#{seconds}s"
+  end
+
+  defp format_next_refresh(_polling), do: "live"
+
+  defp compact_session(nil), do: "n/a"
+
+  defp compact_session(session_id) when is_binary(session_id) do
+    if String.length(session_id) <= 16 do
+      session_id
+    else
+      String.slice(session_id, 0, 4) <> "..." <> String.slice(session_id, -6, 6)
     end
   end
+
+  defp event_text(entry) do
+    entry.last_message || to_string(entry.last_event || "none")
+  end
+
+  defp retry_error(nil), do: ""
+  defp retry_error(""), do: ""
+  defp retry_error(error), do: "error=#{truncate_text(to_string(error), 120)}"
+
+  defp next_in_words(due_in_ms) when is_integer(due_in_ms) do
+    secs = div(max(due_in_ms, 0), 1_000)
+    millis = rem(max(due_in_ms, 0), 1_000)
+    "#{secs}.#{String.pad_leading(to_string(millis), 3, "0")}s"
+  end
+
+  defp next_in_words(_), do: "n/a"
+
+  defp stage_class(stage) do
+    normalized = stage |> to_string() |> String.downcase()
+
+    cond do
+      String.contains?(normalized, ["active", "progress", "running"]) -> "terminal-green"
+      String.contains?(normalized, ["rework", "blocked", "failed", "error"]) -> "terminal-error"
+      String.contains?(normalized, ["ready", "todo", "queued"]) -> "terminal-cyan"
+      true -> "terminal-blue"
+    end
+  end
+
+  defp event_class(nil), do: "terminal-blue"
+  defp event_class("codex/event/token_count"), do: "terminal-yellow"
+  defp event_class("codex/event/task_started"), do: "terminal-green"
+  defp event_class("turn_completed"), do: "terminal-magenta"
+  defp event_class(_), do: "terminal-blue"
+
+  defp truncate_text(value, max_length) when is_binary(value) and byte_size(value) > max_length do
+    String.slice(value, 0, max_length - 1) <> "…"
+  end
+
+  defp truncate_text(value, _max_length), do: value
 
   defp schedule_runtime_tick do
     Process.send_after(self(), :runtime_tick, @runtime_tick_ms)
   end
-
-  defp pretty_value(nil), do: "n/a"
-  defp pretty_value(value), do: inspect(value, pretty: true, limit: :infinity)
 end

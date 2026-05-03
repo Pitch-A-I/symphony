@@ -237,6 +237,14 @@ defmodule SymphonyElixir.Orchestrator do
         Logger.error("Linear project slug missing in WORKFLOW.md")
         state
 
+      {:error, :missing_pitchai_pm_project_id} ->
+        Logger.error("PitchAI PM project_id missing in WORKFLOW.md")
+        state
+
+      {:error, :missing_pitchai_pm_database_url} ->
+        Logger.error("PitchAI PM database URL missing; set tracker.database_url or PITCHAI_PM_DATABASE_URL")
+        state
+
       {:error, :missing_tracker_kind} ->
         Logger.error("Tracker kind missing in WORKFLOW.md")
 
@@ -711,6 +719,8 @@ defmodule SymphonyElixir.Orchestrator do
             last_codex_message: nil,
             last_codex_timestamp: nil,
             last_codex_event: nil,
+            codex_plan: nil,
+            recent_codex_events: [],
             codex_app_server_pid: nil,
             codex_input_tokens: 0,
             codex_output_tokens: 0,
@@ -1122,6 +1132,8 @@ defmodule SymphonyElixir.Orchestrator do
           last_codex_timestamp: metadata.last_codex_timestamp,
           last_codex_message: metadata.last_codex_message,
           last_codex_event: metadata.last_codex_event,
+          codex_plan: Map.get(metadata, :codex_plan),
+          recent_codex_events: Map.get(metadata, :recent_codex_events, []),
           runtime_seconds: running_seconds(metadata.started_at, now)
         }
       end)
@@ -1186,6 +1198,8 @@ defmodule SymphonyElixir.Orchestrator do
         last_codex_message: summarize_codex_update(update),
         session_id: session_id_for_update(running_entry.session_id, update),
         last_codex_event: event,
+        codex_plan: codex_plan_for_update(Map.get(running_entry, :codex_plan), update),
+        recent_codex_events: recent_codex_events_for_update(Map.get(running_entry, :recent_codex_events, []), update),
         codex_app_server_pid: codex_app_server_pid_for_update(codex_app_server_pid, update),
         codex_input_tokens: codex_input_tokens + token_delta.input_tokens,
         codex_output_tokens: codex_output_tokens + token_delta.output_tokens,
@@ -1235,6 +1249,40 @@ defmodule SymphonyElixir.Orchestrator do
 
   defp turn_count_for_update(_existing_count, _existing_session_id, _update), do: 0
 
+  defp codex_plan_for_update(existing_plan, update) do
+    payload = update_payload(update)
+
+    case payload_method(payload) do
+      "turn/plan/updated" ->
+        plan =
+          map_path(payload, ["params", "plan"]) ||
+            map_path(payload, [:params, :plan]) ||
+            map_path(payload, ["params", "steps"]) ||
+            map_path(payload, [:params, :steps]) ||
+            map_path(payload, ["params", "items"]) ||
+            map_path(payload, [:params, :items])
+
+        if is_list(plan), do: plan, else: existing_plan
+
+      _ ->
+        existing_plan
+    end
+  end
+
+  defp recent_codex_events_for_update(events, update) when is_list(events) do
+    event = %{
+      event: update[:event],
+      timestamp: update[:timestamp],
+      method: payload_method(update_payload(update)),
+      message: StatusDashboard.humanize_codex_message(summarize_codex_update(update))
+    }
+
+    [event | events]
+    |> Enum.take(12)
+  end
+
+  defp recent_codex_events_for_update(_events, update), do: recent_codex_events_for_update([], update)
+
   defp summarize_codex_update(update) do
     %{
       event: update[:event],
@@ -1242,6 +1290,24 @@ defmodule SymphonyElixir.Orchestrator do
       timestamp: update[:timestamp]
     }
   end
+
+  defp update_payload(update) when is_map(update), do: update[:payload] || update["payload"] || %{}
+  defp update_payload(_update), do: %{}
+
+  defp payload_method(%{"method" => method}) when is_binary(method), do: method
+  defp payload_method(%{method: method}) when is_binary(method), do: method
+  defp payload_method(_payload), do: nil
+
+  defp map_path(data, path), do: Enum.reduce_while(path, data, &map_path_step/2)
+
+  defp map_path_step(key, %{} = map) do
+    case Map.fetch(map, key) do
+      {:ok, value} -> {:cont, value}
+      :error -> {:halt, nil}
+    end
+  end
+
+  defp map_path_step(_key, _data), do: {:halt, nil}
 
   defp schedule_tick(%State{} = state, delay_ms) when is_integer(delay_ms) and delay_ms >= 0 do
     if is_reference(state.tick_timer_ref) do

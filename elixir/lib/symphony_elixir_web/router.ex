@@ -7,6 +7,7 @@ defmodule SymphonyElixirWeb.Router do
   import Phoenix.LiveView.Router
 
   pipeline :browser do
+    plug(SymphonyElixirWeb.BasicAuth)
     plug(:fetch_session)
     plug(:fetch_live_flash)
     plug(:put_root_layout, html: {SymphonyElixirWeb.Layouts, :root})
@@ -14,7 +15,13 @@ defmodule SymphonyElixirWeb.Router do
     plug(:put_secure_browser_headers)
   end
 
+  pipeline :api_auth do
+    plug(SymphonyElixirWeb.BasicAuth)
+  end
+
   scope "/", SymphonyElixirWeb do
+    pipe_through(:api_auth)
+
     get("/dashboard.css", StaticAssetController, :dashboard_css)
     get("/vendor/phoenix_html/phoenix_html.js", StaticAssetController, :phoenix_html_js)
     get("/vendor/phoenix/phoenix.js", StaticAssetController, :phoenix_js)
@@ -24,10 +31,13 @@ defmodule SymphonyElixirWeb.Router do
   scope "/", SymphonyElixirWeb do
     pipe_through(:browser)
 
-    live("/", DashboardLive, :index)
+    live("/", BoardLive, :index)
+    live("/status", DashboardLive, :index)
   end
 
   scope "/", SymphonyElixirWeb do
+    pipe_through(:api_auth)
+
     get("/api/v1/state", ObservabilityApiController, :state)
 
     match(:*, "/", ObservabilityApiController, :method_not_allowed)

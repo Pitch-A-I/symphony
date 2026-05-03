@@ -3,7 +3,7 @@ defmodule SymphonyElixir.Codex.DynamicTool do
   Executes client-side tool calls requested by Codex app-server turns.
   """
 
-  alias SymphonyElixir.Linear.Client
+  alias SymphonyElixir.{Config, Linear.Client, PitchAIPM}
 
   @linear_graphql_tool "linear_graphql"
   @linear_graphql_description """
@@ -26,11 +26,35 @@ defmodule SymphonyElixir.Codex.DynamicTool do
     }
   }
 
+  @pitchai_pm_tool "pitchai_pm"
+  @pitchai_pm_description """
+  Execute a narrow operation against the PitchAI project-management database.
+  """
+  @pitchai_pm_input_schema %{
+    "type" => "object",
+    "additionalProperties" => false,
+    "required" => ["operation", "params"],
+    "properties" => %{
+      "operation" => %{
+        "type" => "string",
+        "description" => "One of get_task, list_tasks, list_workflow_states, update_task_state, append_changelog, get_workpad, upsert_workpad, add_comment, attach_pr, create_task."
+      },
+      "params" => %{
+        "type" => "object",
+        "description" => "Operation parameters.",
+        "additionalProperties" => true
+      }
+    }
+  }
+
   @spec execute(String.t() | nil, term(), keyword()) :: map()
   def execute(tool, arguments, opts \\ []) do
     case tool do
       @linear_graphql_tool ->
         execute_linear_graphql(arguments, opts)
+
+      @pitchai_pm_tool ->
+        execute_pitchai_pm(arguments, opts)
 
       other ->
         failure_response(%{
@@ -44,13 +68,25 @@ defmodule SymphonyElixir.Codex.DynamicTool do
 
   @spec tool_specs() :: [map()]
   def tool_specs do
-    [
-      %{
-        "name" => @linear_graphql_tool,
-        "description" => @linear_graphql_description,
-        "inputSchema" => @linear_graphql_input_schema
-      }
-    ]
+    case tracker_kind() do
+      "pitchai_pm" ->
+        [
+          %{
+            "name" => @pitchai_pm_tool,
+            "description" => @pitchai_pm_description,
+            "inputSchema" => @pitchai_pm_input_schema
+          }
+        ]
+
+      _ ->
+        [
+          %{
+            "name" => @linear_graphql_tool,
+            "description" => @linear_graphql_description,
+            "inputSchema" => @linear_graphql_input_schema
+          }
+        ]
+    end
   end
 
   defp execute_linear_graphql(arguments, opts) do
@@ -62,6 +98,18 @@ defmodule SymphonyElixir.Codex.DynamicTool do
     else
       {:error, reason} ->
         failure_response(tool_error_payload(reason))
+    end
+  end
+
+  defp execute_pitchai_pm(arguments, opts) do
+    pitchai_pm_client = Keyword.get(opts, :pitchai_pm_client, &PitchAIPM.Client.tool_operation/2)
+
+    with {:ok, operation, params} <- normalize_pitchai_pm_arguments(arguments),
+         {:ok, response} <- pitchai_pm_client.(operation, params) do
+      dynamic_tool_response(true, encode_payload(response))
+    else
+      {:error, reason} ->
+        failure_response(pitchai_pm_error_payload(reason))
     end
   end
 
@@ -89,6 +137,31 @@ defmodule SymphonyElixir.Codex.DynamicTool do
   end
 
   defp normalize_linear_graphql_arguments(_arguments), do: {:error, :invalid_arguments}
+
+  defp normalize_pitchai_pm_arguments(arguments) when is_binary(arguments) do
+    case Jason.decode(arguments) do
+      {:ok, decoded} -> normalize_pitchai_pm_arguments(decoded)
+      {:error, _reason} -> {:error, :invalid_pitchai_pm_arguments}
+    end
+  end
+
+  defp normalize_pitchai_pm_arguments(arguments) when is_map(arguments) do
+    operation =
+      case Map.get(arguments, "operation") || Map.get(arguments, :operation) do
+        value when is_binary(value) -> String.trim(value)
+        _ -> ""
+      end
+
+    params = Map.get(arguments, "params") || Map.get(arguments, :params) || %{}
+
+    cond do
+      operation == "" -> {:error, :missing_pitchai_pm_operation}
+      not is_map(params) -> {:error, :invalid_pitchai_pm_params}
+      true -> {:ok, operation, params}
+    end
+  end
+
+  defp normalize_pitchai_pm_arguments(_arguments), do: {:error, :invalid_pitchai_pm_arguments}
 
   defp normalize_query(arguments) do
     case Map.get(arguments, "query") || Map.get(arguments, :query) do
@@ -203,7 +276,35 @@ defmodule SymphonyElixir.Codex.DynamicTool do
     }
   end
 
+  defp pitchai_pm_error_payload(:missing_pitchai_pm_operation) do
+    %{"error" => %{"message" => "`pitchai_pm` requires a non-empty `operation` string."}}
+  end
+
+  defp pitchai_pm_error_payload(:invalid_pitchai_pm_params) do
+    %{"error" => %{"message" => "`pitchai_pm.params` must be a JSON object."}}
+  end
+
+  defp pitchai_pm_error_payload(:invalid_pitchai_pm_arguments) do
+    %{"error" => %{"message" => "`pitchai_pm` expects an object with `operation` and `params`."}}
+  end
+
+  defp pitchai_pm_error_payload(reason) do
+    %{
+      "error" => %{
+        "message" => "PitchAI PM tool execution failed.",
+        "reason" => inspect(reason)
+      }
+    }
+  end
+
   defp supported_tool_names do
     Enum.map(tool_specs(), & &1["name"])
+  end
+
+  defp tracker_kind do
+    case Config.settings() do
+      {:ok, settings} -> settings.tracker.kind
+      _ -> nil
+    end
   end
 end

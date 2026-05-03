@@ -49,6 +49,9 @@ defmodule SymphonyElixir.Config.Schema do
       field(:endpoint, :string, default: "https://api.linear.app/graphql")
       field(:api_key, :string)
       field(:project_slug, :string)
+      field(:project_id, :string)
+      field(:database_url, :string)
+      field(:poll_limit, :integer, default: 100)
       field(:assignee, :string)
       field(:active_states, {:array, :string}, default: ["Todo", "In Progress"])
       field(:terminal_states, {:array, :string}, default: ["Closed", "Cancelled", "Canceled", "Duplicate", "Done"])
@@ -59,9 +62,21 @@ defmodule SymphonyElixir.Config.Schema do
       schema
       |> cast(
         attrs,
-        [:kind, :endpoint, :api_key, :project_slug, :assignee, :active_states, :terminal_states],
+        [
+          :kind,
+          :endpoint,
+          :api_key,
+          :project_slug,
+          :project_id,
+          :database_url,
+          :poll_limit,
+          :assignee,
+          :active_states,
+          :terminal_states
+        ],
         empty_values: []
       )
+      |> validate_number(:poll_limit, greater_than: 0)
     end
   end
 

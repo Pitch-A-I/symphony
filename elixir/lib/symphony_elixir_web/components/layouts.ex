@@ -28,7 +28,337 @@ defmodule SymphonyElixirWeb.Layouts do
 
             if (!window.Phoenix || !window.LiveView) return;
 
+            var Hooks = {};
+
+            Hooks.KanbanBoard = {
+              mounted: function () {
+                this.handlePointerDown = this.handlePointerDown.bind(this);
+                this.handlePointerMove = this.handlePointerMove.bind(this);
+                this.handlePointerUp = this.handlePointerUp.bind(this);
+                this.handleClick = this.handleClick.bind(this);
+                this.el.addEventListener("pointerdown", this.handlePointerDown);
+                this.el.addEventListener("click", this.handleClick, true);
+              },
+
+              destroyed: function () {
+                this.teardownDrag(false);
+                this.teardownPendingDrag();
+                this.el.removeEventListener("pointerdown", this.handlePointerDown);
+                this.el.removeEventListener("click", this.handleClick, true);
+              },
+
+              updated: function () {
+                this.restoreDragDomAfterPatch();
+              },
+
+              handlePointerDown: function (event) {
+                if (event.button !== 0) return;
+
+                var card = event.target.closest(".ticket-card");
+                if (!card || !this.el.contains(card)) return;
+                if (event.target.closest("a, button, input, select, textarea")) return;
+
+                var taskId = card.getAttribute("data-task-id");
+                if (!taskId) return;
+
+                this.pendingDrag = {
+                  card: card,
+                  taskId: taskId,
+                  startX: event.clientX,
+                  startY: event.clientY
+                };
+
+                document.addEventListener("pointermove", this.handlePointerMove, true);
+                document.addEventListener("pointerup", this.handlePointerUp, true);
+                document.addEventListener("pointercancel", this.handlePointerUp, true);
+              },
+
+              handleClick: function (event) {
+                var card = event.target.closest(".ticket-card");
+                if (!card) return;
+
+                if (card.getAttribute("data-suppress-click") === "true") {
+                  event.preventDefault();
+                  event.stopPropagation();
+                  card.removeAttribute("data-suppress-click");
+                }
+              },
+
+              startDrag: function (event) {
+                var pending = this.pendingDrag;
+                if (!pending) return;
+
+                var sourceCard = pending.card;
+                var rect = sourceCard.getBoundingClientRect();
+                var originParent = sourceCard.parentElement;
+                var dragCard = sourceCard.cloneNode(true);
+                var targetPlaceholder = this.makePlaceholder(rect, "is-target");
+
+                this.markOriginCard(sourceCard, rect);
+
+                this.drag = {
+                  card: dragCard,
+                  sourceCard: sourceCard,
+                  taskId: pending.taskId,
+                  originParent: originParent,
+                  originState: sourceCard.getAttribute("data-state-name"),
+                  originRect: {height: rect.height},
+                  targetPlaceholder: targetPlaceholder,
+                  offsetX: event.clientX - rect.left,
+                  offsetY: event.clientY - rect.top,
+                  lastClientX: event.clientX,
+                  lastClientY: event.clientY,
+                  currentDrop: null,
+                  currentState: null
+                };
+                this.pendingDrag = null;
+
+                dragCard.classList.remove("is-drag-origin-card", "drag-placeholder", "is-origin");
+                dragCard.classList.add("is-drag-layer");
+                dragCard.style.width = rect.width + "px";
+                dragCard.style.left = rect.left + "px";
+                dragCard.style.top = rect.top + "px";
+                document.body.appendChild(dragCard);
+                document.body.classList.add("is-kanban-dragging");
+
+                this.moveCard(event);
+                this.updateDropTarget(event);
+              },
+
+              handlePointerMove: function (event) {
+                if (!this.drag && this.pendingDrag) {
+                  var deltaX = event.clientX - this.pendingDrag.startX;
+                  var deltaY = event.clientY - this.pendingDrag.startY;
+
+                  if (Math.sqrt(deltaX * deltaX + deltaY * deltaY) < 6) return;
+
+                  event.preventDefault();
+                  this.startDrag(event);
+                }
+
+                if (!this.drag) return;
+
+                event.preventDefault();
+                this.moveCard(event);
+                this.updateDropTarget(event);
+              },
+
+              handlePointerUp: function (event) {
+                if (!this.drag && this.pendingDrag) {
+                  this.teardownPendingDrag();
+                  return;
+                }
+
+                if (!this.drag) return;
+
+                event.preventDefault();
+
+                var drag = this.drag;
+                var dropState = drag.currentState;
+                var beforeTaskId = this.taskIdAfterPlaceholder(drag.targetPlaceholder);
+                var afterTaskId = this.taskIdBeforePlaceholder(drag.targetPlaceholder);
+
+                if (dropState) {
+                  drag.sourceCard.setAttribute("data-suppress-click", "true");
+                  this.placeCardAtDropTarget();
+                  this.pushEvent("move_task", {
+                    task_id: drag.taskId,
+                    target_state: dropState,
+                    before_task_id: beforeTaskId || "",
+                    after_task_id: afterTaskId || ""
+                  });
+                  this.teardownDrag(false);
+                } else {
+                  this.teardownDrag(true);
+                }
+              },
+
+              moveCard: function (event) {
+                var drag = this.drag;
+                drag.lastClientX = event.clientX;
+                drag.lastClientY = event.clientY;
+                drag.card.style.left = event.clientX - drag.offsetX + "px";
+                drag.card.style.top = event.clientY - drag.offsetY + "px";
+              },
+
+              updateDropTarget: function (event) {
+                var drag = this.drag;
+                this.clearDropTarget();
+
+                var target = document.elementFromPoint(event.clientX, event.clientY);
+                var drop = target && target.closest("[data-drop-state]");
+                if (!drop || !this.el.contains(drop)) return;
+
+                var stateName = drop.getAttribute("data-drop-state");
+                if (!stateName) return;
+
+                drop.classList.add("is-drop-active");
+                drag.currentDrop = drop;
+                drag.currentState = stateName;
+
+                if (drop.getAttribute("data-hidden-drop") === "true") return;
+
+                var list = drop.querySelector(".ticket-list");
+                if (!list) return;
+
+                var beforeCard = this.cardAfterPointer(list, event.clientY);
+                var empty = list.querySelector(".empty-column");
+
+                if (beforeCard) {
+                  list.insertBefore(drag.targetPlaceholder, beforeCard);
+                } else if (empty) {
+                  list.insertBefore(drag.targetPlaceholder, empty);
+                } else {
+                  list.appendChild(drag.targetPlaceholder);
+                }
+              },
+
+              clearDropTarget: function () {
+                if (!this.drag) return;
+
+                this.el.querySelectorAll(".is-drop-active").forEach(function (node) {
+                  node.classList.remove("is-drop-active");
+                });
+
+                if (this.drag.targetPlaceholder.parentNode) {
+                  this.drag.targetPlaceholder.parentNode.removeChild(this.drag.targetPlaceholder);
+                }
+
+                this.drag.currentDrop = null;
+                this.drag.currentState = null;
+              },
+
+              cardAfterPointer: function (list, pointerY) {
+                var cards = Array.prototype.slice.call(
+                  list.querySelectorAll(".ticket-card:not(.is-drag-layer):not(.is-drag-origin-card)")
+                );
+
+                return cards.reduce(function (closest, child) {
+                  var rect = child.getBoundingClientRect();
+                  var offset = pointerY - rect.top - rect.height / 2;
+
+                  if (offset < 0 && offset > closest.offset) {
+                    return {offset: offset, element: child};
+                  }
+
+                  return closest;
+                }, {offset: Number.NEGATIVE_INFINITY, element: null}).element;
+              },
+
+              taskIdAfterPlaceholder: function (placeholder) {
+                var node = placeholder.nextElementSibling;
+
+                while (node) {
+                  if (node.classList.contains("ticket-card") && !node.classList.contains("is-drag-origin-card")) {
+                    return node.getAttribute("data-task-id");
+                  }
+                  node = node.nextElementSibling;
+                }
+
+                return null;
+              },
+
+              taskIdBeforePlaceholder: function (placeholder) {
+                var node = placeholder.previousElementSibling;
+
+                while (node) {
+                  if (node.classList.contains("ticket-card") && !node.classList.contains("is-drag-origin-card")) {
+                    return node.getAttribute("data-task-id");
+                  }
+                  node = node.previousElementSibling;
+                }
+
+                return null;
+              },
+
+              placeCardAtDropTarget: function () {
+                var drag = this.drag;
+
+                if (drag.targetPlaceholder.parentNode) {
+                  drag.targetPlaceholder.parentNode.insertBefore(drag.sourceCard, drag.targetPlaceholder);
+                } else if (drag.originParent) {
+                  drag.originParent.appendChild(drag.sourceCard);
+                }
+              },
+
+              teardownDrag: function (restore) {
+                if (!this.drag) return;
+
+                var drag = this.drag;
+
+                document.removeEventListener("pointermove", this.handlePointerMove, true);
+                document.removeEventListener("pointerup", this.handlePointerUp, true);
+                document.removeEventListener("pointercancel", this.handlePointerUp, true);
+                document.body.classList.remove("is-kanban-dragging");
+
+                this.el.querySelectorAll(".is-drop-active").forEach(function (node) {
+                  node.classList.remove("is-drop-active");
+                });
+
+                this.unmarkOriginCard(drag.sourceCard);
+
+                if (drag.targetPlaceholder.parentNode) {
+                  drag.targetPlaceholder.parentNode.removeChild(drag.targetPlaceholder);
+                }
+
+                if (drag.card.parentNode) {
+                  drag.card.parentNode.removeChild(drag.card);
+                }
+
+                this.drag = null;
+                this.teardownPendingDrag();
+              },
+
+              teardownPendingDrag: function () {
+                if (!this.pendingDrag) return;
+
+                document.removeEventListener("pointermove", this.handlePointerMove, true);
+                document.removeEventListener("pointerup", this.handlePointerUp, true);
+                document.removeEventListener("pointercancel", this.handlePointerUp, true);
+                this.pendingDrag = null;
+              },
+
+              makePlaceholder: function (rect, className) {
+                var placeholder = document.createElement("div");
+                placeholder.className = "drag-placeholder " + className;
+                placeholder.style.height = rect.height + "px";
+                return placeholder;
+              },
+
+              markOriginCard: function (card, rect) {
+                card.classList.add("is-drag-origin-card", "drag-placeholder", "is-origin");
+                card.style.height = rect.height + "px";
+                card.setAttribute("aria-hidden", "true");
+              },
+
+              unmarkOriginCard: function (card) {
+                if (!card) return;
+
+                card.classList.remove("is-drag-origin-card", "drag-placeholder", "is-origin");
+                card.style.removeProperty("height");
+                card.removeAttribute("aria-hidden");
+              },
+
+              restoreDragDomAfterPatch: function () {
+                if (!this.drag) return;
+
+                var drag = this.drag;
+                var selector = '.ticket-card[data-task-id="' + drag.taskId + '"]:not(.is-drag-layer)';
+                var sourceCard = this.el.querySelector(selector);
+
+                if (sourceCard) {
+                  drag.sourceCard = sourceCard;
+                  this.markOriginCard(sourceCard, drag.originRect);
+                }
+
+                if (drag.lastClientX != null && drag.lastClientY != null) {
+                  this.updateDropTarget({clientX: drag.lastClientX, clientY: drag.lastClientY});
+                }
+              }
+            };
+
             var liveSocket = new window.LiveView.LiveSocket("/live", window.Phoenix.Socket, {
+              hooks: Hooks,
               params: {_csrf_token: csrfToken}
             });
 
