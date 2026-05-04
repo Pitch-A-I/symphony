@@ -136,6 +136,7 @@ defmodule SymphonyElixir.Orchestrator do
           case reason do
             :normal ->
               Logger.info("Agent task completed for issue_id=#{issue_id} session_id=#{session_id}; scheduling active-state continuation check")
+              record_final_assistant_message(running_entry, issue_id)
 
               state
               |> complete_issue(issue_id)
@@ -1317,12 +1318,19 @@ defmodule SymphonyElixir.Orchestrator do
   defp recent_codex_events_for_update(events, update) when is_list(events) do
     event = recent_codex_event(update)
 
-    events
-    |> merge_recent_codex_event(event)
-    |> Enum.take(@recent_codex_event_limit)
+    if assistant_recent_codex_event?(event) do
+      events
+      |> merge_recent_codex_event(event)
+      |> Enum.take(@recent_codex_event_limit)
+    else
+      events
+    end
   end
 
   defp recent_codex_events_for_update(_events, update), do: recent_codex_events_for_update([], update)
+
+  defp assistant_recent_codex_event?(%{stream_kind: "assistant_message"}), do: true
+  defp assistant_recent_codex_event?(_event), do: false
 
   defp recent_codex_event(update) do
     payload = update_payload(update)
@@ -1341,17 +1349,36 @@ defmodule SymphonyElixir.Orchestrator do
         Map.merge(base_event, %{
           message: assistant_stream_message(stream_text),
           stream_kind: "assistant_message",
+          assistant_message_kind: "draft",
           stream_id: stream_id,
           stream_text: stream_text,
           stream_delta_count: 1
         })
 
       :error ->
-        Map.put(base_event, :message, StatusDashboard.humanize_codex_message(summarize_codex_update(update)))
+        case assistant_completed_message(method, payload) do
+          {:ok, text, stream_id} ->
+            stream_text = truncate_stream_text(text)
+
+            Map.merge(base_event, %{
+              message: assistant_final_message(stream_text),
+              stream_kind: "assistant_message",
+              assistant_message_kind: "final",
+              stream_id: stream_id,
+              stream_text: stream_text,
+              stream_delta_count: 1
+            })
+
+          :error ->
+            Map.put(base_event, :message, StatusDashboard.humanize_codex_message(summarize_codex_update(update)))
+        end
     end
   end
 
-  defp merge_recent_codex_event([head | tail], %{stream_kind: "assistant_message"} = event) do
+  defp merge_recent_codex_event(
+         [head | tail],
+         %{stream_kind: "assistant_message", assistant_message_kind: "draft"} = event
+       ) do
     if matching_assistant_stream?(head, event) do
       [merge_assistant_stream_event(head, event) | tail]
     else
@@ -1363,8 +1390,9 @@ defmodule SymphonyElixir.Orchestrator do
 
   defp matching_assistant_stream?(head, event) do
     stream_kind = Map.get(head, :stream_kind) || Map.get(head, "stream_kind")
+    message_kind = Map.get(head, :assistant_message_kind) || Map.get(head, "assistant_message_kind")
 
-    if stream_kind == "assistant_message" do
+    if stream_kind == "assistant_message" and message_kind == "draft" do
       existing_id = Map.get(head, :stream_id) || Map.get(head, "stream_id")
       new_id = Map.get(event, :stream_id)
 
@@ -1404,6 +1432,108 @@ defmodule SymphonyElixir.Orchestrator do
   defp assistant_stream_delta(_method, _payload), do: :error
 
   defp assistant_stream_message(stream_text), do: "assistant draft: #{stream_text}"
+  defp assistant_final_message(stream_text), do: "assistant final: #{stream_text}"
+
+  defp assistant_completed_message(method, payload)
+       when method in ["item/completed", "codex/event/item_completed"] do
+    with true <- assistant_message_payload?(payload),
+         text when is_binary(text) <- assistant_message_text(payload),
+         trimmed when trimmed != "" <- String.trim(text) do
+      {:ok, trimmed, assistant_stream_id(payload)}
+    else
+      _ -> :error
+    end
+  end
+
+  defp assistant_completed_message(_method, _payload), do: :error
+
+  defp assistant_message_payload?(payload) do
+    payload
+    |> extract_first_path(assistant_message_type_paths())
+    |> assistant_message_type?()
+  end
+
+  defp assistant_message_type?(type) when is_binary(type) do
+    normalized_type =
+      type
+      |> String.downcase()
+      |> String.replace(~r/[^a-z]/, "")
+
+    normalized_type in ["agentmessage", "assistantmessage"] or
+      String.contains?(normalized_type, "assistant") or
+      (String.contains?(normalized_type, "agent") and String.contains?(normalized_type, "message"))
+  end
+
+  defp assistant_message_type?(_type), do: false
+
+  defp assistant_message_type_paths do
+    [
+      ["params", "item", "type"],
+      [:params, :item, :type],
+      ["params", "item", "role"],
+      [:params, :item, :role],
+      ["params", "msg", "type"],
+      [:params, :msg, :type],
+      ["params", "msg", "role"],
+      [:params, :msg, :role],
+      ["params", "msg", "payload", "type"],
+      [:params, :msg, :payload, :type],
+      ["params", "msg", "payload", "role"],
+      [:params, :msg, :payload, :role]
+    ]
+  end
+
+  defp assistant_message_text(payload) do
+    payload
+    |> extract_first_path(assistant_message_text_paths())
+    |> normalize_assistant_message_text()
+  end
+
+  defp assistant_message_text_paths do
+    [
+      ["params", "item", "content"],
+      [:params, :item, :content],
+      ["params", "item", "text"],
+      [:params, :item, :text],
+      ["params", "item", "message"],
+      [:params, :item, :message],
+      ["params", "msg", "content"],
+      [:params, :msg, :content],
+      ["params", "msg", "text"],
+      [:params, :msg, :text],
+      ["params", "msg", "message"],
+      [:params, :msg, :message],
+      ["params", "msg", "payload", "content"],
+      [:params, :msg, :payload, :content],
+      ["params", "msg", "payload", "text"],
+      [:params, :msg, :payload, :text],
+      ["params", "msg", "payload", "message"],
+      [:params, :msg, :payload, :message]
+    ]
+  end
+
+  defp normalize_assistant_message_text(text) when is_binary(text), do: text
+
+  defp normalize_assistant_message_text(parts) when is_list(parts) do
+    parts
+    |> Enum.map(&normalize_assistant_message_text/1)
+    |> Enum.reject(&is_nil/1)
+    |> Enum.join("\n")
+  end
+
+  defp normalize_assistant_message_text(%{} = part) do
+    Enum.find_value(["text", :text, "content", :content, "message", :message, "body", :body], fn key ->
+      part
+      |> Map.get(key)
+      |> normalize_assistant_message_text()
+      |> case do
+        text when is_binary(text) and text != "" -> text
+        _ -> nil
+      end
+    end)
+  end
+
+  defp normalize_assistant_message_text(_part), do: nil
 
   defp stream_text_from_event(event) do
     Map.get(event, :stream_text) || Map.get(event, "stream_text") || ""
@@ -1468,6 +1598,74 @@ defmodule SymphonyElixir.Orchestrator do
       "..." <> String.slice(stream_text, start, @recent_codex_stream_char_limit)
     end
   end
+
+  defp record_final_assistant_message(running_entry, issue_id) do
+    with "pitchai_pm" <- Config.settings!().tracker.kind,
+         client when is_atom(client) <- pitchai_pm_client(),
+         true <- function_exported?(client, :upsert_assistant_final_message, 3),
+         message when is_binary(message) <- latest_assistant_message_text(running_entry) do
+      metadata =
+        %{
+          source: "app_server",
+          session_id: Map.get(running_entry, :session_id),
+          turn_count: Map.get(running_entry, :turn_count, 0),
+          issue_identifier: Map.get(running_entry, :identifier),
+          recorded_at: DateTime.utc_now() |> DateTime.truncate(:second) |> DateTime.to_iso8601()
+        }
+
+      case client.upsert_assistant_final_message(issue_id, message, metadata) do
+        :ok ->
+          :ok
+
+        {:error, reason} ->
+          Logger.warning("Failed to record final assistant message for issue_id=#{issue_id}: #{inspect(reason)}")
+      end
+    else
+      _ -> :ok
+    end
+  end
+
+  defp latest_assistant_message_text(running_entry) do
+    running_entry
+    |> Map.get(:recent_codex_events, [])
+    |> Enum.find_value(&assistant_text_from_recent_event/1)
+  end
+
+  defp assistant_text_from_recent_event(event) when is_map(event) do
+    stream_kind = Map.get(event, :stream_kind) || Map.get(event, "stream_kind")
+
+    if stream_kind == "assistant_message" do
+      event
+      |> stream_text_from_event()
+      |> clean_assistant_text()
+      |> case do
+        nil -> event |> assistant_message_from_event() |> strip_assistant_message_prefix()
+        text -> text
+      end
+    end
+  end
+
+  defp assistant_text_from_recent_event(_event), do: nil
+
+  defp assistant_message_from_event(event), do: Map.get(event, :message) || Map.get(event, "message")
+
+  defp strip_assistant_message_prefix(message) when is_binary(message) do
+    message
+    |> String.replace_prefix("assistant final: ", "")
+    |> String.replace_prefix("assistant draft: ", "")
+    |> clean_assistant_text()
+  end
+
+  defp strip_assistant_message_prefix(_message), do: nil
+
+  defp clean_assistant_text(text) when is_binary(text) do
+    case String.trim(text) do
+      "" -> nil
+      trimmed -> trimmed
+    end
+  end
+
+  defp clean_assistant_text(_text), do: nil
 
   defp summarize_codex_update(update) do
     %{

@@ -326,23 +326,24 @@ defmodule SymphonyElixirWeb.Presenter do
   end
 
   defp recent_events_payload(running) do
-    running
-    |> Map.get(:recent_codex_events, [])
-    |> case do
-      events when is_list(events) and events != [] ->
-        Enum.map(events, &runtime_event_payload/1)
+    events =
+      case Map.get(running, :recent_codex_events, []) do
+        events when is_list(events) and events != [] ->
+          Enum.map(events, &runtime_event_payload/1)
 
-      _ ->
-        [
-          %{
-            at: iso8601(running.last_codex_timestamp),
-            event: running.last_codex_event,
-            method: nil,
-            message: summarize_message(running.last_codex_message)
-          }
-        ]
-        |> Enum.reject(&is_nil(&1.at))
-    end
+        _ ->
+          [
+            %{
+              at: iso8601(running.last_codex_timestamp),
+              event: running.last_codex_event,
+              method: nil,
+              message: summarize_message(running.last_codex_message)
+            }
+          ]
+          |> Enum.reject(&is_nil(&1.at))
+      end
+
+    Enum.filter(events, &assistant_runtime_event?/1)
   end
 
   defp runtime_event_payload(event) when is_map(event) do
@@ -350,11 +351,22 @@ defmodule SymphonyElixirWeb.Presenter do
       at: iso8601(Map.get(event, :timestamp) || Map.get(event, "timestamp")),
       event: Map.get(event, :event) || Map.get(event, "event"),
       method: Map.get(event, :method) || Map.get(event, "method"),
-      message: Map.get(event, :message) || Map.get(event, "message")
+      message: Map.get(event, :message) || Map.get(event, "message"),
+      stream_kind: Map.get(event, :stream_kind) || Map.get(event, "stream_kind"),
+      assistant_message_kind: Map.get(event, :assistant_message_kind) || Map.get(event, "assistant_message_kind"),
+      stream_text: Map.get(event, :stream_text) || Map.get(event, "stream_text")
     }
   end
 
   defp runtime_event_payload(_event), do: %{at: nil, event: nil, method: nil, message: nil}
+
+  defp assistant_runtime_event?(%{stream_kind: "assistant_message"}), do: true
+
+  defp assistant_runtime_event?(%{message: message}) when is_binary(message) do
+    String.starts_with?(message, "assistant draft: ") or String.starts_with?(message, "assistant final: ")
+  end
+
+  defp assistant_runtime_event?(_event), do: false
 
   defp summarize_message(nil), do: nil
   defp summarize_message(message), do: StatusDashboard.humanize_codex_message(message)
@@ -504,8 +516,89 @@ defmodule SymphonyElixirWeb.Presenter do
     |> Map.put(:description_text, description_text(Map.get(detail, :description)))
     |> Map.put(:workpad_sections, sections)
     |> Map.put(:blocked_reason, blocked_reason(detail, sections))
+    |> Map.put(:final_assistant_message, final_assistant_message(detail))
     |> Map.put(:progress, progress_summary(sections))
   end
+
+  defp final_assistant_message(detail) when is_map(detail) do
+    runtime_final_assistant_message(Map.get(detail, :runtime)) ||
+      persisted_final_assistant_message(Map.get(detail, :comments, []))
+  end
+
+  defp final_assistant_message(_detail), do: nil
+
+  defp runtime_final_assistant_message(%{recent_events: events}) when is_list(events) do
+    Enum.find_value(events, fn event ->
+      if assistant_message_kind(event) == "final" do
+        assistant_message_detail(event)
+      end
+    end)
+  end
+
+  defp runtime_final_assistant_message(_runtime), do: nil
+
+  defp persisted_final_assistant_message(comments) when is_list(comments) do
+    Enum.find_value(comments, fn comment ->
+      if comment_kind(comment) == "assistant_final" do
+        comment
+        |> comment_body()
+        |> assistant_message_detail(comment_created_at(comment))
+      end
+    end)
+  end
+
+  defp persisted_final_assistant_message(_comments), do: nil
+
+  defp assistant_message_detail(event) when is_map(event) do
+    event
+    |> assistant_message_body()
+    |> assistant_message_detail(Map.get(event, :at) || Map.get(event, "at"))
+  end
+
+  defp assistant_message_detail(body, at) when is_binary(body) do
+    case String.trim(body) do
+      "" -> nil
+      text -> %{body: text, at: at}
+    end
+  end
+
+  defp assistant_message_detail(_body, _at), do: nil
+
+  defp assistant_message_kind(event) when is_map(event) do
+    Map.get(event, :assistant_message_kind) || Map.get(event, "assistant_message_kind")
+  end
+
+  defp assistant_message_kind(_event), do: nil
+
+  defp assistant_message_body(event) when is_map(event) do
+    Map.get(event, :stream_text) ||
+      Map.get(event, "stream_text") ||
+      event
+      |> Map.get(:message, Map.get(event, "message"))
+      |> strip_assistant_prefix()
+  end
+
+  defp assistant_message_body(_event), do: nil
+
+  defp strip_assistant_prefix(message) when is_binary(message) do
+    message
+    |> String.replace_prefix("assistant final: ", "")
+    |> String.replace_prefix("assistant draft: ", "")
+  end
+
+  defp strip_assistant_prefix(_message), do: nil
+
+  defp comment_kind(%{"kind" => kind}) when is_binary(kind), do: kind
+  defp comment_kind(%{kind: kind}) when is_binary(kind), do: kind
+  defp comment_kind(_comment), do: nil
+
+  defp comment_body(%{"body" => body}) when is_binary(body), do: body
+  defp comment_body(%{body: body}) when is_binary(body), do: body
+  defp comment_body(_comment), do: nil
+
+  defp comment_created_at(%{"created_at" => created_at}), do: created_at
+  defp comment_created_at(%{created_at: created_at}), do: created_at
+  defp comment_created_at(_comment), do: nil
 
   defp runtime_plan_from_entry(%{plan: plan}), do: normalize_runtime_plan(plan)
   defp runtime_plan_from_entry(%{"plan" => plan}), do: normalize_runtime_plan(plan)

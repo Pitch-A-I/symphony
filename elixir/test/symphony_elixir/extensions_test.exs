@@ -913,6 +913,7 @@ defmodule SymphonyElixir.ExtensionsTest do
     assert dashboard_css =~ "overflow-y: auto"
     assert dashboard_css =~ ".checklist-item"
     assert dashboard_css =~ ".runtime-events"
+    assert dashboard_css =~ ".assistant-final-message-body"
     assert dashboard_css =~ "scrollbar-gutter: stable"
     assert dashboard_css =~ ".terminal-frame"
     assert dashboard_css =~ ".terminal-running-table"
@@ -947,9 +948,26 @@ defmodule SymphonyElixir.ExtensionsTest do
             %{
               event: :notification,
               timestamp: DateTime.utc_now(),
+              method: "item/completed",
+              message: "assistant final: Finished the modal event cleanup and verified it in LiveView.",
+              stream_kind: "assistant_message",
+              assistant_message_kind: "final",
+              stream_text: "Finished the modal event cleanup and verified it in LiveView.",
+              stream_delta_count: 1
+            },
+            %{
+              event: :notification,
+              timestamp: DateTime.utc_now(),
+              method: "item/commandExecution/outputDelta",
+              message: "command output streaming: mix test output"
+            },
+            %{
+              event: :notification,
+              timestamp: DateTime.utc_now(),
               method: "codex/event/agent_message_delta",
               message: "assistant draft: grouped canonical blocker update",
               stream_kind: "assistant_message",
+              assistant_message_kind: "draft",
               stream_text: "grouped canonical blocker update",
               stream_delta_count: 4
             }
@@ -1062,7 +1080,10 @@ defmodule SymphonyElixir.ExtensionsTest do
     refute detail =~ "detail-chip\">symphony"
     assert detail =~ "Recent app-server events"
     assert detail =~ "assistant draft: grouped canonical blocker update"
+    assert detail =~ "Final assistant message"
+    assert detail =~ "Finished the modal event cleanup and verified it in LiveView."
     refute detail =~ "agent message streaming: grouped"
+    refute detail =~ "command output streaming: mix test output"
     assert detail =~ "Render agent progress like the Symphony demo."
     assert detail =~ "Inspect the current board"
     assert detail =~ "Render nested checkboxes"

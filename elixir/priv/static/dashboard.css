@@ -1357,6 +1357,29 @@ body.is-kanban-dragging {
   white-space: pre-wrap;
 }
 
+.assistant-final-message > span {
+  color: #8b93a1;
+  font-size: 0.72rem;
+  font-weight: 680;
+}
+
+.assistant-final-message-body {
+  max-height: min(18rem, 36vh);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: 0.56rem 0.62rem;
+  border: 1px solid #edf0f5;
+  border-radius: 0.46rem;
+  background: #fff;
+  color: #3d4450;
+  font-size: 0.78rem;
+  font-weight: 600;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+  scrollbar-gutter: stable;
+  white-space: pre-wrap;
+}
+
 .terminal-page {
   min-height: 100vh;
   background: var(--terminal-bg);

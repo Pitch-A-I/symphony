@@ -101,7 +101,7 @@ defmodule SymphonyElixir.OrchestratorStatusTest do
            }
   end
 
-  test "orchestrator coalesces assistant stream deltas and keeps deeper recent event scrollback" do
+  test "orchestrator coalesces assistant stream deltas and keeps noise out of recent event scrollback" do
     issue_id = "issue-stream"
 
     issue = %Issue{
@@ -160,6 +160,24 @@ defmodule SymphonyElixir.OrchestratorStatusTest do
       )
     end
 
+    send(
+      pid,
+      {:codex_worker_update, issue_id,
+       %{
+         event: :notification,
+         payload: %{
+           "method" => "item/completed",
+           "params" => %{
+             "item" => %{
+               "type" => "agentMessage",
+               "content" => [%{"type" => "text", "text" => "Grouped canonical blocker final message"}]
+             }
+           }
+         },
+         timestamp: DateTime.utc_now()
+       }}
+    )
+
     for event_number <- 1..20 do
       send(
         pid,
@@ -177,12 +195,19 @@ defmodule SymphonyElixir.OrchestratorStatusTest do
 
     stream_event =
       Enum.find(snapshot_entry.recent_codex_events, fn event ->
-        Map.get(event, :stream_kind) == "assistant_message"
+        Map.get(event, :stream_kind) == "assistant_message" and Map.get(event, :assistant_message_kind) == "draft"
       end)
 
-    assert length(snapshot_entry.recent_codex_events) == 21
+    final_event =
+      Enum.find(snapshot_entry.recent_codex_events, fn event ->
+        Map.get(event, :stream_kind) == "assistant_message" and Map.get(event, :assistant_message_kind) == "final"
+      end)
+
+    assert length(snapshot_entry.recent_codex_events) == 2
     assert stream_event.message == "assistant draft: Grouped canonical blocker"
     assert stream_event.stream_delta_count == 3
+    assert final_event.message == "assistant final: Grouped canonical blocker final message"
+    refute Enum.any?(snapshot_entry.recent_codex_events, &(Map.get(&1, :method) == "custom/event/20"))
     refute stream_event.message =~ "agent message streaming"
   end
 

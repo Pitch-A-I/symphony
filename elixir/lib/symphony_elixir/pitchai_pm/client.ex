@@ -483,6 +483,31 @@ defmodule SymphonyElixir.PitchAIPM.Client do
     end
   end
 
+  @spec upsert_assistant_final_message(String.t(), String.t(), map()) :: :ok | {:error, term()}
+  def upsert_assistant_final_message(task_id, body, metadata)
+      when is_binary(task_id) and is_binary(body) and is_map(metadata) do
+    sql = """
+    with updated as (
+      update pitchai_symphony.task_comments
+      set body = $2::text,
+          author = 'symphony',
+          metadata = $3::text::jsonb,
+          created_at = now()
+      where task_id = $1::text::uuid
+        and kind = 'assistant_final'
+      returning id
+    )
+    insert into pitchai_symphony.task_comments(task_id, body, author, kind, metadata)
+    select $1::text::uuid, $2::text, 'symphony', 'assistant_final', $3::text::jsonb
+    where not exists (select 1 from updated)
+    """
+
+    case query(sql, [task_id, body, Jason.encode!(metadata)]) do
+      {:ok, _result} -> :ok
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
   defp fetch_blocked_tasks(scope_project_ids) when is_list(scope_project_ids) do
     sql = """
     select

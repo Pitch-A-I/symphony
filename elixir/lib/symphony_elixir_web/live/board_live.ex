@@ -627,7 +627,13 @@ defmodule SymphonyElixirWeb.BoardLive do
                 <strong><%= event.message || event.method || event.event %></strong>
               </div>
             </div>
-            <span :if={!@task.runtime || @task.runtime.recent_events == []}>No live events yet</span>
+            <span :if={!@task.runtime || @task.runtime.recent_events == []}>No assistant messages yet</span>
+          </section>
+
+          <section :if={@task.final_assistant_message} class="detail-side-section assistant-final-message">
+            <h3>Final assistant message</h3>
+            <span :if={@task.final_assistant_message.at}><%= format_updated(@task.final_assistant_message.at) %></span>
+            <div class="assistant-final-message-body"><%= @task.final_assistant_message.body %></div>
           </section>
 
           <section class="detail-side-section">
