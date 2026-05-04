@@ -658,7 +658,12 @@ defmodule SymphonyElixirWeb.BoardLive do
 
           <section :if={@task.final_assistant_message} class="detail-side-section assistant-final-message">
             <h3>Final assistant message</h3>
-            <span :if={@task.final_assistant_message.at}><%= format_updated(@task.final_assistant_message.at) %></span>
+            <div class="assistant-final-message-meta">
+              <span :if={@task.final_assistant_message.at}><%= format_updated(@task.final_assistant_message.at) %></span>
+              <span :if={final_message_source(@task.final_assistant_message)}>
+                <%= final_message_source(@task.final_assistant_message) %>
+              </span>
+            </div>
             <div class="assistant-final-message-body"><%= @task.final_assistant_message.body %></div>
           </section>
 
@@ -1162,6 +1167,14 @@ defmodule SymphonyElixirWeb.BoardLive do
       _ -> 0
     end
   end
+
+  defp final_message_source(message) when is_map(message) do
+    message
+    |> map_value(:source)
+    |> normalize_optional_string()
+  end
+
+  defp final_message_source(_message), do: nil
 
   defp empty_section_label(%{key: "plan"}, %{runtime_status: %{kind: "running"}}), do: "Waiting for the app-server plan update."
   defp empty_section_label(%{key: "plan"}, _task), do: "No plan recorded yet."

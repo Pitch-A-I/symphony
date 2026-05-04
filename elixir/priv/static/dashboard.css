@@ -1357,7 +1357,19 @@ body.is-kanban-dragging {
   white-space: pre-wrap;
 }
 
-.assistant-final-message > span {
+.assistant-final-message-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.36rem;
+}
+
+.assistant-final-message-meta span {
+  display: inline-flex;
+  align-items: center;
+  width: fit-content;
+  padding: 0.12rem 0.34rem;
+  border-radius: 999px;
+  background: #f5f7fb;
   color: #8b93a1;
   font-size: 0.72rem;
   font-weight: 680;

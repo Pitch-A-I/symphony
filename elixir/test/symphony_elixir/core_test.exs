@@ -541,6 +541,7 @@ defmodule SymphonyElixir.CoreTest do
       |> Map.put(:retry_attempts, %{})
     end)
 
+    before_down_ms = System.monotonic_time(:millisecond)
     send(pid, {:DOWN, ref, :process, self(), :normal})
     Process.sleep(50)
     state = :sys.get_state(pid)
@@ -549,7 +550,7 @@ defmodule SymphonyElixir.CoreTest do
     assert MapSet.member?(state.completed, issue_id)
     assert %{attempt: 1, due_at_ms: due_at_ms} = state.retry_attempts[issue_id]
     assert is_integer(due_at_ms)
-    assert_due_in_range(due_at_ms, 500, 1_100)
+    assert_due_after(due_at_ms, before_down_ms, 500, 1_100)
   end
 
   test "abnormal worker exit increments retry attempt progressively" do
@@ -753,6 +754,13 @@ defmodule SymphonyElixir.CoreTest do
 
     assert remaining_ms >= min_remaining_ms
     assert remaining_ms <= max_remaining_ms
+  end
+
+  defp assert_due_after(due_at_ms, base_ms, min_delay_ms, max_delay_ms) do
+    delay_ms = due_at_ms - base_ms
+
+    assert delay_ms >= min_delay_ms
+    assert delay_ms <= max_delay_ms
   end
 
   defp restore_app_env(key, nil), do: Application.delete_env(:symphony_elixir, key)

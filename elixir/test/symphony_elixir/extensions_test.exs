@@ -366,6 +366,66 @@ defmodule SymphonyElixir.ExtensionsTest do
        }}
     end
 
+    def task_detail("issue-human-review") do
+      {:ok,
+       %{
+         id: "issue-human-review",
+         identifier: "MT-REVIEW",
+         title: "Completed task without captured assistant final",
+         description: %{"request" => "Show a useful summary when no final assistant comment exists."},
+         state: "Human Review",
+         value_name: "Task",
+         rank: 1024.0,
+         priority: nil,
+         labels: [],
+         branch_name: nil,
+         url: "",
+         assignee: "symphony",
+         repo_full_name: nil,
+         repo_url: nil,
+         workspace_path: nil,
+         tracking_metadata: %{},
+         project: %{id: "project-pm", name: "TODO App"},
+         workpad: %{
+           body: """
+           ## Codex Workpad
+
+           ### Plan
+
+           - [x] 1. Implement the modal fallback
+
+           ### Acceptance Criteria
+
+           - [x] Completed tasks explain what happened
+
+           ### Validation
+
+           - [x] LiveView detail modal test covers the workpad-derived summary
+
+           ### Notes
+
+           - 2026-05-04T09:00Z: Implemented the final-message fallback.
+           - 2026-05-04T09:05Z: Verified completed work is visible in the modal.
+           """,
+           updated_at: "2026-05-04T09:05:00Z"
+         },
+         comments: [],
+         prs: [],
+         state_events: [
+           %{
+             "from_state" => "In Progress",
+             "to_state" => "Human Review",
+             "actor" => "symphony",
+             "reason" => "tool_update_task_state",
+             "created_at" => "2026-05-04T09:05:00Z"
+           }
+         ],
+         blockers: [],
+         created_at: "2026-05-04T08:00:00Z",
+         updated_at: "2026-05-04T09:05:00Z"
+       }}
+    end
+
     def task_detail(_task_id), do: {:error, :task_not_found}
 
     def create_board_task(params) do
@@ -1106,6 +1166,13 @@ defmodule SymphonyElixir.ExtensionsTest do
     assert detail =~ "Render nested checkboxes"
     assert detail =~ "Acceptance Criteria"
     assert detail =~ "State history"
+
+    completed_detail = render_click(view, "open_task", %{"task_id" => "issue-human-review"})
+    assert completed_detail =~ "Final assistant message"
+    assert completed_detail =~ "derived from workpad"
+    assert completed_detail =~ "No stored app-server final message was captured for this run."
+    assert completed_detail =~ "Verified completed work is visible in the modal."
+    assert completed_detail =~ "LiveView detail modal test covers the workpad-derived summary"
 
     blocked_detail = render_click(view, "open_task", %{"task_id" => "issue-blocked"})
     assert blocked_detail =~ "blocked-reason-panel"

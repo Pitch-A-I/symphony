@@ -516,21 +516,24 @@ defmodule SymphonyElixirWeb.Presenter do
     |> Map.put(:description_text, description_text(Map.get(detail, :description)))
     |> Map.put(:workpad_sections, sections)
     |> Map.put(:blocked_reason, blocked_reason(detail, sections))
-    |> Map.put(:final_assistant_message, final_assistant_message(detail))
+    |> Map.put(:final_assistant_message, final_assistant_message(detail, sections))
     |> Map.put(:progress, progress_summary(sections))
   end
 
-  defp final_assistant_message(detail) when is_map(detail) do
+  defp final_assistant_message(detail, sections) when is_map(detail) and is_list(sections) do
     runtime_final_assistant_message(Map.get(detail, :runtime)) ||
-      persisted_final_assistant_message(Map.get(detail, :comments, []))
+      persisted_final_assistant_message(Map.get(detail, :comments, [])) ||
+      workpad_completion_message(detail, sections)
   end
 
-  defp final_assistant_message(_detail), do: nil
+  defp final_assistant_message(_detail, _sections), do: nil
 
   defp runtime_final_assistant_message(%{recent_events: events}) when is_list(events) do
     Enum.find_value(events, fn event ->
       if assistant_message_kind(event) == "final" do
-        assistant_message_detail(event)
+        event
+        |> assistant_message_detail()
+        |> with_message_source("app-server")
       end
     end)
   end
@@ -543,11 +546,131 @@ defmodule SymphonyElixirWeb.Presenter do
         comment
         |> comment_body()
         |> assistant_message_detail(comment_created_at(comment))
+        |> with_message_source("stored app-server final")
       end
     end)
   end
 
   defp persisted_final_assistant_message(_comments), do: nil
+
+  defp workpad_completion_message(detail, sections) when is_map(detail) and is_list(sections) do
+    if completed_state?(Map.get(detail, :state)) do
+      body = workpad_completion_body(sections)
+
+      if is_binary(body) do
+        %{
+          body: body,
+          at: get_in(detail, [:workpad, :updated_at]) || Map.get(detail, :updated_at),
+          source: "derived from workpad"
+        }
+      end
+    end
+  end
+
+  defp workpad_completion_message(_detail, _sections), do: nil
+
+  defp completed_state?(state) when is_binary(state) do
+    state
+    |> String.downcase()
+    |> String.trim()
+    |> then(&(&1 in ["human review", "done"]))
+  end
+
+  defp completed_state?(_state), do: false
+
+  defp workpad_completion_body(sections) do
+    notes =
+      sections
+      |> section_text_lines("notes")
+      |> take_last(3)
+      |> Enum.reverse()
+
+    validation =
+      sections
+      |> section_checked_items("validation")
+      |> take_last(5)
+      |> Enum.reverse()
+
+    acceptance =
+      sections
+      |> section_checked_items("acceptance_criteria")
+      |> take_last(3)
+
+    [
+      {"Recent workpad notes", notes},
+      {"Validation evidence", validation},
+      {"Completed acceptance criteria", acceptance}
+    ]
+    |> Enum.reject(fn {_title, lines} -> lines == [] end)
+    |> case do
+      [] ->
+        nil
+
+      groups ->
+        [
+          "No stored app-server final message was captured for this run. Workpad completion summary:",
+          groups
+          |> Enum.map(fn {title, lines} -> "#{title}:\n" <> bullet_lines(lines) end)
+          |> Enum.join("\n\n")
+        ]
+        |> Enum.join("\n\n")
+    end
+  end
+
+  defp section_text_lines(sections, key) do
+    sections
+    |> Enum.find_value([], fn
+      %{key: ^key, text_lines: lines} when is_list(lines) -> lines
+      %{"key" => ^key, "text_lines" => lines} when is_list(lines) -> lines
+      _section -> nil
+    end)
+    |> Enum.map(&String.trim/1)
+    |> Enum.reject(&(&1 == ""))
+  end
+
+  defp section_checked_items(sections, key) do
+    sections
+    |> Enum.find_value([], fn
+      %{key: ^key, items: items} when is_list(items) -> checked_item_text(items)
+      %{"key" => ^key, "items" => items} when is_list(items) -> checked_item_text(items)
+      _section -> nil
+    end)
+  end
+
+  defp checked_item_text(items) do
+    items
+    |> Enum.filter(fn
+      %{checked: true} -> true
+      %{"checked" => true} -> true
+      _item -> false
+    end)
+    |> Enum.map(fn item -> Map.get(item, :text) || Map.get(item, "text") end)
+    |> Enum.filter(&is_binary/1)
+    |> Enum.map(&String.trim/1)
+    |> Enum.reject(&(&1 == ""))
+  end
+
+  defp take_last(items, count) when is_list(items) and is_integer(count) and count > 0 do
+    items
+    |> Enum.reverse()
+    |> Enum.take(count)
+    |> Enum.reverse()
+  end
+
+  defp take_last(_items, _count), do: []
+
+  defp bullet_lines(lines), do: lines |> Enum.map(&("- " <> bullet_text(&1))) |> Enum.join("\n")
+
+  defp bullet_text(line) when is_binary(line) do
+    line
+    |> String.trim()
+    |> String.replace(~r/^[-*]\s+/, "")
+  end
+
+  defp bullet_text(_line), do: ""
+
+  defp with_message_source(nil, _source), do: nil
+  defp with_message_source(message, source) when is_map(message), do: Map.put(message, :source, source)
 
   defp assistant_message_detail(event) when is_map(event) do
     event
