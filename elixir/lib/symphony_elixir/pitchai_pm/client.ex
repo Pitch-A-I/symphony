@@ -528,7 +528,30 @@ defmodule SymphonyElixir.PitchAIPM.Client do
   defp release_resolved_blocked_tasks(scope_project_ids) when is_list(scope_project_ids) do
     sql = """
     with candidates as (
-      select t.id, t.state_name
+      select
+        t.id,
+        t.state_name,
+        coalesce(
+          (
+            select case lower(trim(coalesce(event.from_state, '')))
+              when 'active' then 'In Progress'
+              when 'ready' then 'Todo'
+              when 'symphony active' then 'In Progress'
+              when 'symphony ready' then 'Todo'
+              when 'symphony merging' then 'Merging'
+              when 'symphony rework' then 'Rework'
+              else event.from_state
+            end
+            from pitchai_symphony.task_state_events event
+            where event.task_id = t.id
+              and lower(trim(coalesce(event.to_state, ''))) = 'blocked'
+              and nullif(trim(coalesce(event.from_state, '')), '') is not null
+              and not (lower(trim(coalesce(event.from_state, ''))) = any($2::text[]))
+            order by event.created_at desc, event.id desc
+            limit 1
+          ),
+          'Todo'
+        ) as resume_state
       from public.tasks t
       where t.project_id::text = any($1::text[])
         and lower(trim(coalesce(t.state_name, ''))) = 'blocked'
@@ -549,11 +572,11 @@ defmodule SymphonyElixir.PitchAIPM.Client do
     ),
     updated_tasks as (
       update public.tasks t
-      set state_name = 'Todo',
+      set state_name = c.resume_state,
           updated_at = now()
       from candidates c
       where t.id = c.id
-      returning t.id, c.state_name as from_state, t.state_name as to_state
+      returning t.id, c.state_name as from_state, t.state_name as to_state, c.resume_state
     ),
     state_events as (
       insert into pitchai_symphony.task_state_events(task_id, from_state, to_state, actor, reason, metadata)
@@ -563,7 +586,7 @@ defmodule SymphonyElixir.PitchAIPM.Client do
         to_state,
         'symphony',
         'resolved_blocker_release',
-        jsonb_build_object('source', $3::text)
+        jsonb_build_object('source', $3::text, 'resume_state', resume_state)
       from updated_tasks
       where from_state is distinct from to_state
       returning task_id
@@ -572,10 +595,10 @@ defmodule SymphonyElixir.PitchAIPM.Client do
       insert into pitchai_symphony.task_comments(task_id, body, author, kind, metadata)
       select
         id,
-        'Moved back to Todo because every linked blocker task is now terminal.',
+        'Moved back to ' || to_state || ' because every linked blocker task is now terminal.',
         'symphony',
         'blocker_release',
-        jsonb_build_object('source', $3::text)
+        jsonb_build_object('source', $3::text, 'resume_state', resume_state)
       from updated_tasks
       returning task_id
     )

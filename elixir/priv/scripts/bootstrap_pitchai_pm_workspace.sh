@@ -125,6 +125,35 @@ checkout_branch() {
   log "checked out $target_branch"
 }
 
+script_dir="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd -P)"
+symphony_repo_root="$(CDPATH= cd -- "$script_dir/../../.." && pwd -P)"
+symphony_skills_dir="$symphony_repo_root/.codex/skills"
+
+install_symphony_skill() {
+  skill_name="$1"
+  source_dir="$symphony_skills_dir/$skill_name"
+  target_dir=".codex/skills/$skill_name"
+
+  [ -f "$source_dir/SKILL.md" ] || die "required Symphony skill missing: $source_dir/SKILL.md"
+
+  rm -rf "$target_dir"
+  mkdir -p ".codex/skills"
+  cp -R "$source_dir" "$target_dir"
+}
+
+install_symphony_orchestration_skills() {
+  [ -d ".git" ] || return 0
+
+  install_symphony_skill land
+  install_symphony_skill commit
+  install_symphony_skill pull
+  install_symphony_skill push
+  install_symphony_skill pm-db
+  install_symphony_skill pitchai-pm
+
+  log "installed Symphony orchestration skills into workspace"
+}
+
 [ -n "${SYMPHONY_ISSUE_ID:-}" ] || die "SYMPHONY_ISSUE_ID is not set"
 is_valid_uuid "$SYMPHONY_ISSUE_ID" || die "SYMPHONY_ISSUE_ID is not a UUID: $SYMPHONY_ISSUE_ID"
 [ -n "${PITCHAI_PM_DATABASE_URL:-}" ] || die "PITCHAI_PM_DATABASE_URL is not set"
@@ -136,6 +165,7 @@ fi
 
 if workspace_has_git_repo; then
   log "workspace already has a git repository"
+  install_symphony_orchestration_skills
   exit 0
 fi
 
@@ -182,3 +212,4 @@ else
 fi
 
 checkout_branch "${SYMPHONY_WORKSPACE_BRANCH:-staging}" "$default_branch"
+install_symphony_orchestration_skills

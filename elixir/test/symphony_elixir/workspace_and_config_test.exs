@@ -41,6 +41,41 @@ defmodule SymphonyElixir.WorkspaceAndConfigTest do
     end
   end
 
+  test "PitchAI bootstrap repairs existing git workspaces with orchestration skills" do
+    test_root =
+      Path.join(
+        System.tmp_dir!(),
+        "symphony-elixir-pitchai-bootstrap-skills-#{System.unique_integer([:positive])}"
+      )
+
+    try do
+      workspace = Path.join(test_root, "workspace")
+      bootstrap_script = Path.expand("../../priv/scripts/bootstrap_pitchai_pm_workspace.sh", __DIR__)
+
+      File.mkdir_p!(workspace)
+      System.cmd("git", ["-C", workspace, "init", "-b", "staging"])
+
+      {output, 0} =
+        System.cmd("sh", [bootstrap_script],
+          env: [
+            {"SYMPHONY_ISSUE_ID", "00000000-0000-0000-0000-000000000001"},
+            {"SYMPHONY_WORKSPACE", workspace},
+            {"PITCHAI_PM_DATABASE_URL", "postgresql://unused.invalid/symphony_test"}
+          ],
+          stderr_to_stdout: true
+        )
+
+      assert output =~ "workspace already has a git repository"
+      assert output =~ "installed Symphony orchestration skills into workspace"
+
+      for skill <- ~w(land commit pull push pm-db pitchai-pm) do
+        assert File.exists?(Path.join([workspace, ".codex", "skills", skill, "SKILL.md"]))
+      end
+    after
+      File.rm_rf(test_root)
+    end
+  end
+
   test "workspace hooks receive issue and workspace environment" do
     test_root =
       Path.join(
