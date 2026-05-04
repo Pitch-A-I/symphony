@@ -1047,6 +1047,8 @@ body.is-kanban-dragging * {
   color: #4b5563;
   font-size: 0.94rem;
   line-height: 1.55;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
 }
 
 .detail-inline-meta,

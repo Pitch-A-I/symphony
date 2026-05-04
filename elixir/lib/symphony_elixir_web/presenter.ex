@@ -8,6 +8,33 @@ defmodule SymphonyElixirWeb.Presenter do
   @workpad_section_titles ["Plan", "Acceptance Criteria", "Validation", "Notes", "Blockers"]
   @checkbox_line ~r/^(\s*)-\s+\[(x|X| )\]\s+(.+)$/
   @heading_line ~r/^###\s+(.+?)\s*$/
+  @description_primary_paths [
+    ["request"],
+    ["summary"],
+    ["description"],
+    ["description_text"],
+    ["text"],
+    ["content"],
+    ["goal"],
+    ["pitchai_dispatch", "task_enrichment", "payload", "summary"]
+  ]
+  @description_labeled_paths [
+    {"Context", ["context"]},
+    {"Background", ["background"]},
+    {"Background", ["pitchai_dispatch", "task_enrichment", "payload", "background"]},
+    {"Scope", ["scope"]},
+    {"Scope", ["pitchai_dispatch", "task_enrichment", "payload", "scope"]},
+    {"Expected", ["expected_behavior"]},
+    {"Expected", ["expected_teacher_mental_model"]},
+    {"Actual", ["actual_behavior"]},
+    {"Impact", ["teacher_impact"]},
+    {"Steps", ["reproduction_steps"]},
+    {"Acceptance", ["acceptance"]},
+    {"Acceptance", ["acceptance_criteria"]},
+    {"Acceptance", ["pitchai_dispatch", "task_enrichment", "payload", "acceptance_criteria"]},
+    {"Validation", ["validation"]},
+    {"Notes", ["notes"]}
+  ]
 
   @spec state_payload(GenServer.name(), timeout()) :: map()
   def state_payload(orchestrator, snapshot_timeout_ms) do
@@ -871,16 +898,83 @@ defmodule SymphonyElixirWeb.Presenter do
   end
 
   defp description_text(description) when is_map(description) do
-    [
-      Map.get(description, "request"),
-      Map.get(description, "scope"),
-      Map.get(description, "summary"),
-      Map.get(description, "text")
-    ]
-    |> Enum.find(&(is_binary(&1) and String.trim(&1) != ""))
+    primary = description_primary_text(description)
+    labeled = description_labeled_texts(description, primary)
+
+    ([primary] ++ labeled)
+    |> Enum.reject(&is_nil/1)
+    |> case do
+      [] -> nil
+      parts -> Enum.join(parts, "\n\n")
+    end
   end
 
+  defp description_text(description) when is_binary(description), do: clean_text(description)
+  defp description_text(description) when is_list(description), do: description_value_to_text(description)
   defp description_text(_description), do: nil
+
+  defp description_primary_text(description) do
+    Enum.find_value(@description_primary_paths, fn path ->
+      description
+      |> description_path_value(path)
+      |> description_value_to_text()
+    end)
+  end
+
+  defp description_labeled_texts(description, primary) do
+    {parts, _seen} =
+      Enum.reduce(@description_labeled_paths, {[], MapSet.new([primary])}, fn {label, path}, {parts, seen} ->
+        text =
+          description
+          |> description_path_value(path)
+          |> description_value_to_text()
+
+        if is_nil(text) or MapSet.member?(seen, text) do
+          {parts, seen}
+        else
+          {[description_labeled_text(label, text) | parts], MapSet.put(seen, text)}
+        end
+      end)
+
+    parts
+    |> Enum.reverse()
+    |> Enum.take(8)
+  end
+
+  defp description_labeled_text(label, text) do
+    if String.contains?(text, "\n") do
+      "#{label}:\n#{text}"
+    else
+      "#{label}: #{text}"
+    end
+  end
+
+  defp description_path_value(description, path) when is_map(description) and is_list(path) do
+    Enum.reduce_while(path, description, fn key, current ->
+      if is_map(current) do
+        {:cont, Map.get(current, key)}
+      else
+        {:halt, nil}
+      end
+    end)
+  end
+
+  defp description_path_value(_description, _path), do: nil
+
+  defp description_value_to_text(value) when is_binary(value), do: clean_text(value)
+
+  defp description_value_to_text(values) when is_list(values) do
+    values
+    |> Enum.map(&description_value_to_text/1)
+    |> Enum.reject(&is_nil/1)
+    |> case do
+      [] -> nil
+      [single] -> "- #{single}"
+      multiple -> Enum.map_join(multiple, "\n", &"- #{&1}")
+    end
+  end
+
+  defp description_value_to_text(_value), do: nil
 
   defp blocked_reason(detail, sections) when is_map(detail) and is_list(sections) do
     if blocked_state?(Map.get(detail, :state)) do

@@ -346,6 +346,46 @@ defmodule SymphonyElixir.ExtensionsTest do
        }}
     end
 
+    def task_detail("issue-todo") do
+      {:ok,
+       %{
+         id: "issue-todo",
+         identifier: "MT-890",
+         title: "Upgrade to latest React version",
+         description: %{
+           "context" => "Repeated clicks during a slow response can submit duplicate server work.",
+           "acceptance" => "A second click while work is in-flight does not create another request.",
+           "reproduction_steps" => [
+             "Throttle the network or backend response.",
+             "Click the same action twice."
+           ],
+           "changelog" => [
+             %{"summary" => "Noisy history should not appear in the modal description."}
+           ]
+         },
+         state: "Todo",
+         value_name: "Task",
+         rank: 1024.0,
+         priority: 5,
+         labels: [],
+         branch_name: nil,
+         url: "",
+         assignee: nil,
+         repo_full_name: nil,
+         repo_url: nil,
+         workspace_path: nil,
+         tracking_metadata: %{},
+         project: %{id: "project-pm", name: "TODO App"},
+         workpad: %{body: nil, updated_at: nil},
+         comments: [],
+         prs: [],
+         state_events: [],
+         blockers: [],
+         created_at: "2026-05-01T12:00:00Z",
+         updated_at: "2026-05-02T12:00:00Z"
+       }}
+    end
+
     def task_detail("issue-blocked") do
       {:ok,
        %{
@@ -1053,6 +1093,7 @@ defmodule SymphonyElixir.ExtensionsTest do
     assert dashboard_css =~ "width: min(88rem, calc(100vw - 1.8rem))"
     assert dashboard_css =~ "max-height: calc(100dvh - 1.5rem)"
     assert dashboard_css =~ "overflow-y: auto"
+    assert dashboard_css =~ "white-space: pre-wrap"
     assert dashboard_css =~ ".checklist-item"
     assert dashboard_css =~ ".runtime-events"
     assert dashboard_css =~ ".assistant-final-message-body"
@@ -1233,6 +1274,13 @@ defmodule SymphonyElixir.ExtensionsTest do
     assert hidden_html =~ "Hidden columns"
     assert hidden_html =~ "Rework"
     assert hidden_html =~ "Duplicate"
+
+    todo_detail = render_click(view, "open_task", %{"task_id" => "issue-todo"})
+    assert todo_detail =~ "Context: Repeated clicks during a slow response can submit duplicate server work."
+    assert todo_detail =~ "Acceptance: A second click while work is in-flight does not create another request."
+    assert todo_detail =~ "Steps:"
+    assert todo_detail =~ "- Throttle the network or backend response."
+    refute todo_detail =~ "Noisy history should not appear in the modal description."
 
     detail = render_click(view, "open_task", %{"task_id" => "issue-http"})
     assert detail =~ "phx-hook=\"ModalScrollLock\""
