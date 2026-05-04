@@ -86,6 +86,13 @@ defmodule SymphonyElixir.ExtensionsTest do
          task_limit_per_column: 12,
          columns: [
            %{
+             state_name: "Cancelled",
+             color: "#94a3b8",
+             task_count: 0,
+             hidden?: false,
+             tasks: []
+           },
+           %{
              state_name: "Suggested",
              color: "#8b5cf6",
              task_count: 1,
@@ -267,13 +274,6 @@ defmodule SymphonyElixir.ExtensionsTest do
                  workpad_updated_at: nil
                }
              ]
-           },
-           %{
-             state_name: "Cancelled",
-             color: "#94a3b8",
-             task_count: 0,
-             hidden?: false,
-             tasks: []
            }
          ],
          hidden_columns: [
@@ -1137,6 +1137,7 @@ defmodule SymphonyElixir.ExtensionsTest do
     assert html =~ "Project"
     assert html =~ "issue-group-label"
     assert html =~ "group-chevron"
+    assert html_index(html, "Cancelled") < html_index(html, "Suggested")
     assert html =~ "Suggested"
     refute html =~ "Backlog"
     assert html =~ "Todo"

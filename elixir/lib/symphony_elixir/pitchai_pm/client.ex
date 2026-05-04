@@ -18,6 +18,15 @@ defmodule SymphonyElixir.PitchAIPM.Client do
 
   @board_default_states [
     %{
+      state_name: "Cancelled",
+      category: "terminal",
+      color: "#94a3b8",
+      sort_order: -20,
+      is_active: false,
+      is_terminal: true,
+      is_visible_button: true
+    },
+    %{
       state_name: "Suggested",
       category: "queue",
       color: "#8b5cf6",
@@ -85,15 +94,6 @@ defmodule SymphonyElixir.PitchAIPM.Client do
       category: "terminal",
       color: "#6366f1",
       sort_order: 60,
-      is_active: false,
-      is_terminal: true,
-      is_visible_button: true
-    },
-    %{
-      state_name: "Cancelled",
-      category: "terminal",
-      color: "#94a3b8",
-      sort_order: 70,
       is_active: false,
       is_terminal: true,
       is_visible_button: true
