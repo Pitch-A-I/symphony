@@ -134,10 +134,9 @@ defmodule SymphonyElixir.Workspace do
   def remove_issue_workspaces(identifier, worker_host) when is_binary(identifier) and is_binary(worker_host) do
     safe_id = safe_identifier(identifier)
 
-    case workspace_path_for_issue(safe_id, worker_host) do
-      {:ok, workspace} -> remove(workspace, worker_host)
-      {:error, _reason} -> :ok
-    end
+    safe_id
+    |> remote_issue_workspace_paths(worker_host)
+    |> Enum.each(&remove(&1, worker_host))
 
     :ok
   end
@@ -147,10 +146,9 @@ defmodule SymphonyElixir.Workspace do
 
     case Config.settings!().worker.ssh_hosts do
       [] ->
-        case workspace_path_for_issue(safe_id, nil) do
-          {:ok, workspace} -> remove(workspace, nil)
-          {:error, _reason} -> :ok
-        end
+        safe_id
+        |> local_issue_workspace_paths()
+        |> Enum.each(&remove(&1, nil))
 
       worker_hosts ->
         Enum.each(worker_hosts, &remove_issue_workspaces(identifier, &1))
@@ -201,6 +199,67 @@ defmodule SymphonyElixir.Workspace do
 
   defp workspace_path_for_issue(safe_id, worker_host) when is_binary(safe_id) and is_binary(worker_host) do
     {:ok, Path.join(Config.settings!().workspace.root, safe_id)}
+  end
+
+  defp local_issue_workspace_paths(safe_id) when is_binary(safe_id) do
+    case workspace_path_for_issue(safe_id, nil) do
+      {:ok, exact_workspace} ->
+        workspace_root = Path.dirname(exact_workspace)
+        suffix_glob = Path.join(workspace_root, safe_id <> "@*")
+
+        [exact_workspace | Path.wildcard(suffix_glob)]
+        |> Enum.uniq()
+        |> Enum.filter(&valid_local_workspace_candidate?/1)
+
+      {:error, _reason} ->
+        []
+    end
+  end
+
+  defp valid_local_workspace_candidate?(workspace) when is_binary(workspace) do
+    validate_workspace_path(workspace, nil) == :ok
+  end
+
+  defp remote_issue_workspace_paths(safe_id, worker_host) when is_binary(safe_id) and is_binary(worker_host) do
+    workspace_root = Config.settings!().workspace.root
+
+    script =
+      [
+        remote_shell_assign("workspace_root", workspace_root),
+        remote_shell_assign("safe_id", safe_id),
+        "if [ -d \"$workspace_root\" ]; then",
+        "  find \"$workspace_root\" -mindepth 1 -maxdepth 1 \\( -name \"$safe_id\" -o -name \"$safe_id@*\" \\) -print0",
+        "fi"
+      ]
+      |> Enum.join("\n")
+
+    case run_remote_command(worker_host, script, Config.settings!().hooks.timeout_ms) do
+      {:ok, {output, 0}} ->
+        paths =
+          output
+          |> IO.iodata_to_binary()
+          |> String.split(<<0>>, trim: true)
+          |> Enum.filter(&(validate_workspace_path(&1, worker_host) == :ok))
+
+        if paths == [] do
+          fallback_remote_issue_workspace_path(safe_id, worker_host)
+        else
+          paths
+        end
+
+      {:ok, {_output, _status}} ->
+        fallback_remote_issue_workspace_path(safe_id, worker_host)
+
+      {:error, _reason} ->
+        fallback_remote_issue_workspace_path(safe_id, worker_host)
+    end
+  end
+
+  defp fallback_remote_issue_workspace_path(safe_id, worker_host) do
+    case workspace_path_for_issue(safe_id, worker_host) do
+      {:ok, workspace} -> [workspace]
+      {:error, _reason} -> []
+    end
   end
 
   defp safe_identifier(identifier) do

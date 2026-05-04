@@ -222,11 +222,17 @@ defmodule SymphonyElixir.ExtensionsTest do
              task_count: 12,
              hidden?: false,
              tasks: []
+           },
+           %{
+             state_name: "Cancelled",
+             color: "#94a3b8",
+             task_count: 0,
+             hidden?: false,
+             tasks: []
            }
          ],
          hidden_columns: [
            %{state_name: "Rework", color: "#dc2626", task_count: 0, hidden?: true, tasks: []},
-           %{state_name: "Cancelled", color: "#94a3b8", task_count: 0, hidden?: true, tasks: []},
            %{state_name: "Duplicate", color: "#94a3b8", task_count: 0, hidden?: true, tasks: []}
          ]
        }}
@@ -503,6 +509,14 @@ defmodule SymphonyElixir.ExtensionsTest do
     def handle_call(:request_refresh, _from, state) do
       {:reply, Keyword.get(state, :refresh, :unavailable), state}
     end
+
+    def handle_call({:cancel_issue, issue_id, identifier}, _from, state) do
+      if recipient = Keyword.get(state, :recipient) do
+        send(recipient, {:orchestrator_cancel_issue, issue_id, identifier})
+      end
+
+      {:reply, :ok, state}
+    end
   end
 
   setup do
@@ -775,6 +789,7 @@ defmodule SymphonyElixir.ExtensionsTest do
     {:ok, _pid} =
       StaticOrchestrator.start_link(
         name: orchestrator_name,
+        recipient: self(),
         snapshot: snapshot,
         refresh: %{
           queued: true,
@@ -1053,6 +1068,7 @@ defmodule SymphonyElixir.ExtensionsTest do
     {:ok, _pid} =
       StaticOrchestrator.start_link(
         name: orchestrator_name,
+        recipient: self(),
         snapshot: snapshot,
         refresh: %{
           queued: true,
@@ -1080,6 +1096,7 @@ defmodule SymphonyElixir.ExtensionsTest do
     assert html =~ "Human Review"
     assert html =~ "Merging"
     assert html =~ "Done"
+    assert html =~ "Cancelled"
     assert html =~ "TODO App"
     assert html =~ "MT-BLOCK"
     assert html =~ "3 downstream"
@@ -1087,7 +1104,6 @@ defmodule SymphonyElixir.ExtensionsTest do
     assert html =~ "No application source files are present in the provided workspace."
     refute html =~ "Hidden columns"
     refute html =~ "Rework"
-    refute html =~ "Cancelled"
     refute html =~ "Duplicate"
     refute html =~ "Symphony Ready"
     assert html =~ "state-spinner"
@@ -1143,7 +1159,6 @@ defmodule SymphonyElixir.ExtensionsTest do
     hidden_html = render_click(view, "toggle_hidden_columns")
     assert hidden_html =~ "Hidden columns"
     assert hidden_html =~ "Rework"
-    assert hidden_html =~ "Cancelled"
     assert hidden_html =~ "Duplicate"
 
     detail = render_click(view, "open_task", %{"task_id" => "issue-http"})
@@ -1156,6 +1171,7 @@ defmodule SymphonyElixir.ExtensionsTest do
     assert detail =~ "detail-chip\">P3"
     refute detail =~ "detail-chip\">symphony"
     assert detail =~ "Recent app-server events"
+    assert detail =~ "Stop"
     assert detail =~ "assistant draft: grouped canonical blocker update"
     assert detail =~ "Final assistant message"
     assert detail =~ "Finished the modal event cleanup and verified it in LiveView."
@@ -1182,15 +1198,27 @@ defmodule SymphonyElixir.ExtensionsTest do
     assert blocked_detail =~ "Blocked by"
     assert blocked_detail =~ "MT-SUG"
     assert blocked_detail =~ "Move to Todo"
+    assert blocked_detail =~ "Cancel"
 
     Application.put_env(:symphony_elixir, :pitchai_pm_test_recipient, self())
     render_hook(view, "move_task", %{"task_id" => "issue-todo", "target_state" => "Human Review"})
 
     assert_receive {:pitchai_pm_move_issue_on_board, "issue-todo", "Human Review", %{after_task_id: nil, before_task_id: nil, reason: "kanban_drag_drop"}}
 
+    render_hook(view, "move_task", %{"task_id" => "issue-http", "target_state" => "Cancelled"})
+
+    assert_receive {:pitchai_pm_move_issue_on_board, "issue-http", "Cancelled", %{after_task_id: nil, before_task_id: nil, reason: "kanban_drag_cancel"}}
+
+    assert_receive {:orchestrator_cancel_issue, "issue-http", "MT-HTTP"}
+
     render_click(view, "move_task_to_todo", %{"task_id" => "issue-blocked"})
 
     assert_receive {:pitchai_pm_move_issue_on_board, "issue-blocked", "Todo", %{reason: "modal_move_to_todo"}}
+
+    render_click(view, "cancel_task", %{"task_id" => "issue-blocked"})
+
+    assert_receive {:pitchai_pm_move_issue_on_board, "issue-blocked", "Cancelled", %{reason: "modal_cancel"}}
+    assert_receive {:orchestrator_cancel_issue, "issue-blocked", "MT-BLOCK"}
 
     render_click(view, "focus_task_card", %{"task_id" => "issue-suggested"})
     assert_push_event(view, "focus-task-card", %{task_id: "issue-suggested"})

@@ -1016,7 +1016,8 @@ body.is-kanban-dragging {
 }
 
 .blocker-ref-chip,
-.detail-todo-action {
+.detail-todo-action,
+.detail-cancel-action {
   display: inline-flex;
   align-items: center;
   min-height: 1.72rem;
@@ -1025,6 +1026,14 @@ body.is-kanban-dragging {
   cursor: pointer;
   font-size: 0.76rem;
   font-weight: 730;
+}
+
+.detail-quick-actions {
+  display: inline-flex;
+  flex: 0 0 auto;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 0.4rem;
 }
 
 .blocker-ref-chip {
@@ -1062,6 +1071,19 @@ body.is-kanban-dragging {
 
 .detail-todo-action:hover {
   background: #333740;
+}
+
+.detail-cancel-action {
+  flex: 0 0 auto;
+  padding: 0.22rem 0.58rem;
+  border-color: rgba(220, 38, 38, 0.28);
+  background: #fff5f5;
+  color: #a12424;
+}
+
+.detail-cancel-action:hover {
+  border-color: rgba(220, 38, 38, 0.48);
+  background: #ffe8e8;
 }
 
 .detail-status-pill.running {

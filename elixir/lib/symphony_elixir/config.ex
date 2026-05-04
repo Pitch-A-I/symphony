@@ -87,7 +87,7 @@ defmodule SymphonyElixir.Config do
   def server_port do
     case Application.get_env(:symphony_elixir, :server_port_override) do
       port when is_integer(port) and port >= 0 -> port
-      _ -> settings!().server.port
+      _ -> env_server_port() || settings!().server.port
     end
   end
 
@@ -137,6 +137,19 @@ defmodule SymphonyElixir.Config do
 
       kind ->
         {:error, {:unsupported_tracker_kind, kind}}
+    end
+  end
+
+  defp env_server_port do
+    case System.get_env("SYMPHONY_SERVER_PORT") do
+      nil ->
+        nil
+
+      value ->
+        case Integer.parse(String.trim(value)) do
+          {port, ""} when port >= 0 -> port
+          _invalid -> nil
+        end
     end
   end
 

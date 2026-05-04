@@ -289,17 +289,21 @@ defmodule SymphonyElixir.WorkspaceAndConfigTest do
 
     try do
       target_workspace = Path.join(workspace_root, "S_1")
+      suffixed_workspace = Path.join(workspace_root, "S_1@abc123")
       untouched_workspace = Path.join(workspace_root, "OTHER-#{System.unique_integer([:positive])}")
 
       File.mkdir_p!(target_workspace)
+      File.mkdir_p!(suffixed_workspace)
       File.mkdir_p!(untouched_workspace)
       File.write!(Path.join(target_workspace, "marker.txt"), "stale")
+      File.write!(Path.join(suffixed_workspace, "marker.txt"), "stale-suffixed")
       File.write!(Path.join(untouched_workspace, "marker.txt"), "keep")
 
       write_workflow_file!(Workflow.workflow_file_path(), workspace_root: workspace_root)
 
       assert :ok = Workspace.remove_issue_workspaces("S_1")
       refute File.exists?(target_workspace)
+      refute File.exists?(suffixed_workspace)
       assert File.exists?(untouched_workspace)
     after
       File.rm_rf(workspace_root)

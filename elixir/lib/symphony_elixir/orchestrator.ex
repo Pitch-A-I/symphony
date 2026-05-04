@@ -1136,6 +1136,23 @@ defmodule SymphonyElixir.Orchestrator do
     end
   end
 
+  @spec cancel_issue(String.t(), String.t() | nil) :: :ok | :unavailable
+  def cancel_issue(issue_id, identifier \\ nil), do: cancel_issue(__MODULE__, issue_id, identifier, 15_000)
+
+  @spec cancel_issue(GenServer.server(), String.t(), String.t() | nil, timeout()) :: :ok | :unavailable
+  def cancel_issue(server, issue_id, identifier, timeout)
+      when is_binary(issue_id) and (is_binary(identifier) or is_nil(identifier)) do
+    if Process.whereis(server) do
+      try do
+        GenServer.call(server, {:cancel_issue, issue_id, identifier}, timeout)
+      catch
+        :exit, _ -> :unavailable
+      end
+    else
+      :unavailable
+    end
+  end
+
   @spec snapshot() :: map() | :timeout | :unavailable
   def snapshot, do: snapshot(__MODULE__, 15_000)
 
@@ -1225,6 +1242,48 @@ defmodule SymphonyElixir.Orchestrator do
        requested_at: DateTime.utc_now(),
        operations: ["poll", "reconcile"]
      }, state}
+  end
+
+  def handle_call({:cancel_issue, issue_id, identifier}, _from, state) do
+    state = cancel_issue_runtime(state, issue_id, identifier)
+    notify_dashboard()
+    {:reply, :ok, state}
+  end
+
+  defp cancel_issue_runtime(%State{} = state, issue_id, identifier) do
+    {retry_entry, state} = cancel_retry_attempt(state, issue_id)
+    state = terminate_running_issue(state, issue_id, true)
+
+    retry_entry
+    |> retry_workspace_cleanup_targets(identifier)
+    |> Enum.each(fn {target_identifier, worker_host} ->
+      cleanup_issue_workspace(target_identifier, worker_host)
+    end)
+
+    state
+    |> release_issue_claim(issue_id)
+    |> Map.update!(:completed, &MapSet.delete(&1, issue_id))
+  end
+
+  defp cancel_retry_attempt(%State{retry_attempts: retry_attempts} = state, issue_id) do
+    case Map.pop(retry_attempts, issue_id) do
+      {nil, _retry_attempts} ->
+        {nil, state}
+
+      {%{timer_ref: timer_ref} = retry_entry, updated_retry_attempts} ->
+        if is_reference(timer_ref), do: Process.cancel_timer(timer_ref)
+        {retry_entry, %{state | retry_attempts: updated_retry_attempts}}
+    end
+  end
+
+  defp retry_workspace_cleanup_targets(nil, identifier) when is_binary(identifier), do: [{identifier, nil}]
+  defp retry_workspace_cleanup_targets(nil, _identifier), do: []
+
+  defp retry_workspace_cleanup_targets(retry_entry, fallback_identifier) when is_map(retry_entry) do
+    identifier = Map.get(retry_entry, :identifier) || fallback_identifier
+    worker_host = Map.get(retry_entry, :worker_host)
+
+    if is_binary(identifier), do: [{identifier, worker_host}], else: []
   end
 
   defp integrate_codex_update(running_entry, %{event: event, timestamp: timestamp} = update) do

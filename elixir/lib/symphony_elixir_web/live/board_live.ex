@@ -160,7 +160,14 @@ defmodule SymphonyElixirWeb.BoardLive do
         after_task_id: optional_param(params, "after_task_id")
       }
 
-      case Presenter.move_board_task(task_id, target_state, opts) do
+      move_result =
+        if cancel_state?(target_state) do
+          Presenter.cancel_board_task(task_id, orchestrator(), snapshot_timeout_ms(), Map.put(opts, :reason, "kanban_drag_cancel"))
+        else
+          Presenter.move_board_task(task_id, target_state, opts)
+        end
+
+      case move_result do
         :ok ->
           {:noreply, reload_board(socket)}
 
@@ -172,6 +179,22 @@ defmodule SymphonyElixirWeb.BoardLive do
       end
     else
       {:noreply, put_flash(socket, :error, "Move failed: unsupported target state")}
+    end
+  end
+
+  @impl true
+  def handle_event("cancel_task", %{"task_id" => task_id}, socket) do
+    reason = selected_task_cancel_reason(socket.assigns[:selected_task])
+
+    case Presenter.cancel_board_task(task_id, orchestrator(), snapshot_timeout_ms(), %{reason: reason}) do
+      :ok ->
+        {:noreply, reload_board(socket)}
+
+      {:error, reason} ->
+        {:noreply,
+         socket
+         |> put_flash(:error, "Cancel failed: #{inspect(reason, pretty: false)}")
+         |> reload_board()}
     end
   end
 
@@ -509,7 +532,7 @@ defmodule SymphonyElixirWeb.BoardLive do
 
           <% detail_chips = detail_chips(@task) %>
           <% blocker_refs = task_blocker_refs(@task) %>
-          <div :if={detail_chips != [] or blocker_refs != [] or show_move_to_todo?(@task)} class="detail-quick-row">
+          <div :if={detail_chips != [] or blocker_refs != [] or show_move_to_todo?(@task) or show_cancel_task?(@task)} class="detail-quick-row">
             <div class="detail-inline-meta">
               <span :for={chip <- detail_chips} class="detail-chip"><%= chip %></span>
               <span :if={blocker_refs != []} class="detail-inline-label">Blocked by</span>
@@ -526,15 +549,26 @@ defmodule SymphonyElixirWeb.BoardLive do
                 <small><%= state_label(blocker.state) %></small>
               </button>
             </div>
-            <button
-              :if={show_move_to_todo?(@task)}
-              type="button"
-              class="detail-todo-action"
-              phx-click="move_task_to_todo"
-              phx-value-task_id={@task.id}
-            >
-              Move to Todo
-            </button>
+            <div class="detail-quick-actions">
+              <button
+                :if={show_move_to_todo?(@task)}
+                type="button"
+                class="detail-todo-action"
+                phx-click="move_task_to_todo"
+                phx-value-task_id={@task.id}
+              >
+                Move to Todo
+              </button>
+              <button
+                :if={show_cancel_task?(@task)}
+                type="button"
+                class="detail-cancel-action"
+                phx-click="cancel_task"
+                phx-value-task_id={@task.id}
+              >
+                <%= cancel_task_label(@task) %>
+              </button>
+            </div>
           </div>
 
           <section :if={blocked_reason(@task)} class="blocked-reason-panel" aria-label="Blocked reason">
@@ -1150,6 +1184,36 @@ defmodule SymphonyElixirWeb.BoardLive do
   end
 
   defp show_move_to_todo?(_task), do: false
+
+  defp show_cancel_task?(task) when is_map(task) do
+    normalize_state(Map.get(task, :state)) not in terminal_task_states()
+  end
+
+  defp show_cancel_task?(_task), do: false
+
+  defp cancel_task_label(%{runtime_status: %{kind: "running"}}), do: "Stop"
+
+  defp cancel_task_label(task) when is_map(task) do
+    case normalize_state(Map.get(task, :state)) do
+      state when state in ["suggested", "todo"] -> "Deny"
+      _state -> "Cancel"
+    end
+  end
+
+  defp selected_task_cancel_reason(%{runtime_status: %{kind: "running"}}), do: "modal_stop"
+
+  defp selected_task_cancel_reason(task) when is_map(task) do
+    case normalize_state(Map.get(task, :state)) do
+      state when state in ["suggested", "todo"] -> "modal_deny"
+      _state -> "modal_cancel"
+    end
+  end
+
+  defp selected_task_cancel_reason(_task), do: "modal_cancel"
+
+  defp cancel_state?(state_name), do: normalize_state(state_name) == "cancelled"
+
+  defp terminal_task_states, do: ["done", "cancelled", "canceled", "duplicate"]
 
   defp map_value(map, key) when is_map(map), do: Map.get(map, key) || Map.get(map, to_string(key))
 

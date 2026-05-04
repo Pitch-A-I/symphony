@@ -93,10 +93,10 @@ defmodule SymphonyElixir.PitchAIPM.Client do
       state_name: "Cancelled",
       category: "terminal",
       color: "#94a3b8",
-      sort_order: 80,
+      sort_order: 70,
       is_active: false,
       is_terminal: true,
-      is_visible_button: false
+      is_visible_button: true
     },
     %{
       state_name: "Duplicate",

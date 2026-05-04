@@ -161,6 +161,33 @@ defmodule SymphonyElixirWeb.Presenter do
     end
   end
 
+  @spec cancel_board_task(String.t(), GenServer.name(), timeout(), map()) :: :ok | {:error, term()}
+  def cancel_board_task(task_id, orchestrator, snapshot_timeout_ms, opts \\ %{})
+      when is_binary(task_id) and is_map(opts) do
+    case Config.settings!().tracker.kind do
+      "pitchai_pm" ->
+        with {:ok, detail} <- pitchai_pm_client().task_detail(task_id),
+             :ok <-
+               pitchai_pm_client().move_issue_on_board(
+                 task_id,
+                 "Cancelled",
+                 Map.put_new(opts, :reason, "kanban_cancel")
+               ) do
+          cancel_orchestrator_issue(orchestrator, task_id, detail.identifier, snapshot_timeout_ms)
+        end
+
+      other ->
+        {:error, {:unsupported_board_tracker, other}}
+    end
+  end
+
+  defp cancel_orchestrator_issue(orchestrator, task_id, identifier, timeout) do
+    case Orchestrator.cancel_issue(orchestrator, task_id, identifier, timeout) do
+      :ok -> :ok
+      other -> {:error, {:orchestrator_cancel_failed, other}}
+    end
+  end
+
   @spec set_board_group_collapsed(String.t(), String.t(), String.t(), boolean()) :: :ok | {:error, term()}
   def set_board_group_collapsed(group_by, column_state_name, group_key, collapsed?)
       when is_binary(group_by) and is_binary(column_state_name) and is_binary(group_key) and is_boolean(collapsed?) do
@@ -610,8 +637,7 @@ defmodule SymphonyElixirWeb.Presenter do
         [
           "No stored app-server final message was captured for this run. Workpad completion summary:",
           groups
-          |> Enum.map(fn {title, lines} -> "#{title}:\n" <> bullet_lines(lines) end)
-          |> Enum.join("\n\n")
+          |> Enum.map_join("\n\n", fn {title, lines} -> "#{title}:\n" <> bullet_lines(lines) end)
         ]
         |> Enum.join("\n\n")
     end
@@ -659,7 +685,7 @@ defmodule SymphonyElixirWeb.Presenter do
 
   defp take_last(_items, _count), do: []
 
-  defp bullet_lines(lines), do: lines |> Enum.map(&("- " <> bullet_text(&1))) |> Enum.join("\n")
+  defp bullet_lines(lines), do: Enum.map_join(lines, "\n", &("- " <> bullet_text(&1)))
 
   defp bullet_text(line) when is_binary(line) do
     line

@@ -672,6 +672,83 @@ defmodule SymphonyElixir.CoreTest do
            } = :sys.get_state(pid).retry_attempts[issue_id]
   end
 
+  test "manual cancellation stops running issue, clears retry, and removes suffixed workspace" do
+    issue_id = "issue-cancel"
+    orchestrator_name = Module.concat(__MODULE__, :CancelIssueOrchestrator)
+
+    workspace_root =
+      Path.join(
+        System.tmp_dir!(),
+        "symphony-cancel-workspace-#{System.unique_integer([:positive])}"
+      )
+
+    write_workflow_file!(Workflow.workflow_file_path(),
+      tracker_kind: "memory",
+      workspace_root: workspace_root
+    )
+
+    suffixed_workspace = Path.join(workspace_root, "MT-CANCEL@abc123")
+    File.mkdir_p!(suffixed_workspace)
+    File.write!(Path.join(suffixed_workspace, "marker.txt"), "stale")
+
+    {:ok, pid} = Orchestrator.start_link(name: orchestrator_name)
+    worker_pid = spawn(fn -> Process.sleep(:infinity) end)
+    worker_ref = Process.monitor(worker_pid)
+    retry_timer_ref = Process.send_after(self(), :cancel_retry_test_timer, 60_000)
+
+    on_exit(fn ->
+      Process.cancel_timer(retry_timer_ref)
+
+      if Process.alive?(worker_pid) do
+        Process.exit(worker_pid, :kill)
+      end
+
+      if Process.alive?(pid) do
+        Process.exit(pid, :normal)
+      end
+
+      File.rm_rf(workspace_root)
+    end)
+
+    initial_state = :sys.get_state(pid)
+
+    running_entry = %{
+      pid: worker_pid,
+      ref: worker_ref,
+      identifier: "MT-CANCEL",
+      issue: %Issue{id: issue_id, identifier: "MT-CANCEL", state: "In Progress"},
+      started_at: DateTime.utc_now()
+    }
+
+    :sys.replace_state(pid, fn _ ->
+      initial_state
+      |> Map.put(:running, %{issue_id => running_entry})
+      |> Map.put(:claimed, MapSet.new([issue_id]))
+      |> Map.put(:completed, MapSet.new([issue_id]))
+      |> Map.put(:retry_attempts, %{
+        issue_id => %{
+          attempt: 2,
+          timer_ref: retry_timer_ref,
+          retry_token: make_ref(),
+          due_at_ms: System.monotonic_time(:millisecond) + 60_000,
+          identifier: "MT-CANCEL",
+          error: "queued retry"
+        }
+      })
+    end)
+
+    assert :ok = Orchestrator.cancel_issue(orchestrator_name, issue_id, "MT-CANCEL", 1_000)
+    Process.sleep(20)
+
+    state = :sys.get_state(pid)
+    refute Map.has_key?(state.running, issue_id)
+    refute Map.has_key?(state.retry_attempts, issue_id)
+    refute MapSet.member?(state.claimed, issue_id)
+    refute MapSet.member?(state.completed, issue_id)
+    refute Process.alive?(worker_pid)
+    refute File.exists?(suffixed_workspace)
+  end
+
   test "manual refresh coalesces repeated requests and ignores superseded ticks" do
     now_ms = System.monotonic_time(:millisecond)
     stale_tick_token = make_ref()
