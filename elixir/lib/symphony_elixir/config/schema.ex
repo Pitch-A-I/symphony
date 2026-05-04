@@ -54,7 +54,7 @@ defmodule SymphonyElixir.Config.Schema do
       field(:poll_limit, :integer, default: 100)
       field(:assignee, :string)
       field(:active_states, {:array, :string}, default: ["Todo", "In Progress"])
-      field(:terminal_states, {:array, :string}, default: ["Closed", "Cancelled", "Canceled", "Duplicate", "Done"])
+      field(:terminal_states, {:array, :string}, default: ["Done", "Cancelled", "Canceled", "Duplicate"])
     end
 
     @spec changeset(%__MODULE__{}, map()) :: Ecto.Changeset.t()

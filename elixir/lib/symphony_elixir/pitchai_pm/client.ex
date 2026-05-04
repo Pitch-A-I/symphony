@@ -39,8 +39,8 @@ defmodule SymphonyElixir.PitchAIPM.Client do
       state_name: "In Progress",
       category: "active",
       color: "#facc15",
-      sort_order: 30,
-      is_active: false,
+      sort_order: 20,
+      is_active: true,
       is_terminal: false,
       is_visible_button: true
     },
@@ -48,17 +48,8 @@ defmodule SymphonyElixir.PitchAIPM.Client do
       state_name: "Human Review",
       category: "review",
       color: "#e85d8e",
-      sort_order: 40,
+      sort_order: 30,
       is_active: false,
-      is_terminal: false,
-      is_visible_button: true
-    },
-    %{
-      state_name: "Symphony Ready",
-      category: "queue",
-      color: "#2563eb",
-      sort_order: 50,
-      is_active: true,
       is_terminal: false,
       is_visible_button: true
     },
@@ -66,16 +57,16 @@ defmodule SymphonyElixir.PitchAIPM.Client do
       state_name: "Merging",
       category: "merge",
       color: "#059669",
-      sort_order: 60,
+      sort_order: 40,
       is_active: true,
       is_terminal: false,
-      is_visible_button: false
+      is_visible_button: true
     },
     %{
       state_name: "Rework",
       category: "rework",
       color: "#dc2626",
-      sort_order: 70,
+      sort_order: 45,
       is_active: true,
       is_terminal: false,
       is_visible_button: false
@@ -84,7 +75,7 @@ defmodule SymphonyElixir.PitchAIPM.Client do
       state_name: "Blocked",
       category: "blocked",
       color: "#64748b",
-      sort_order: 80,
+      sort_order: 50,
       is_active: false,
       is_terminal: false,
       is_visible_button: true
@@ -93,25 +84,16 @@ defmodule SymphonyElixir.PitchAIPM.Client do
       state_name: "Done",
       category: "terminal",
       color: "#6366f1",
-      sort_order: 100,
+      sort_order: 60,
       is_active: false,
       is_terminal: true,
-      is_visible_button: false
+      is_visible_button: true
     },
     %{
       state_name: "Cancelled",
       category: "terminal",
       color: "#94a3b8",
-      sort_order: 110,
-      is_active: false,
-      is_terminal: true,
-      is_visible_button: false
-    },
-    %{
-      state_name: "Canceled",
-      category: "terminal",
-      color: "#94a3b8",
-      sort_order: 111,
+      sort_order: 80,
       is_active: false,
       is_terminal: true,
       is_visible_button: false
@@ -120,31 +102,12 @@ defmodule SymphonyElixir.PitchAIPM.Client do
       state_name: "Duplicate",
       category: "terminal",
       color: "#94a3b8",
-      sort_order: 112,
+      sort_order: 90,
       is_active: false,
       is_terminal: true,
       is_visible_button: false
     }
   ]
-
-  @state_sort_orders %{
-    "backlog" => 0,
-    "suggested" => -10,
-    "todo" => 10,
-    "in progress" => 30,
-    "human review" => 40,
-    "symphony ready" => 50,
-    "merging" => 60,
-    "rework" => 70,
-    "blocked" => 80,
-    "idea" => 90,
-    "open" => 100,
-    "done" => 100,
-    "enriched" => 110,
-    "cancelled" => 110,
-    "canceled" => 111,
-    "duplicate" => 112
-  }
 
   @task_select """
   select
@@ -2065,7 +2028,7 @@ defmodule SymphonyElixir.PitchAIPM.Client do
   end
 
   defp tool_create_task(params) do
-    with {:ok, task_id} <- insert_task(params, "Backlog") do
+    with {:ok, task_id} <- insert_task(params, "Suggested") do
       tool_get_task(%{"task_id" => task_id})
     end
   end
@@ -2433,10 +2396,8 @@ defmodule SymphonyElixir.PitchAIPM.Client do
       @board_default_states
       |> Enum.reduce(%{}, fn state, acc -> Map.put(acc, normalize_state_key(state.state_name), state) end)
       |> merge_workflow_states(workflow_states)
-      |> merge_task_states(Map.keys(state_counts))
 
     tasks_by_state = Enum.group_by(tasks, &normalize_state_key(&1.state))
-    terminal_states = Config.settings!().tracker.terminal_states |> normalize_states() |> MapSet.new()
 
     states
     |> Map.values()
@@ -2448,7 +2409,7 @@ defmodule SymphonyElixir.PitchAIPM.Client do
       state
       |> Map.put(:task_count, task_count)
       |> Map.put(:tasks, task_cards)
-      |> Map.put(:hidden?, hidden_board_state?(state, terminal_states))
+      |> Map.put(:hidden?, hidden_board_state?(state))
     end)
     |> Enum.sort_by(fn state -> {state.sort_order || 500, String.downcase(state.state_name)} end)
   end
@@ -2457,7 +2418,11 @@ defmodule SymphonyElixir.PitchAIPM.Client do
     Enum.reduce(workflow_states, states, fn workflow_state, acc ->
       key = normalize_state_key(workflow_state.state_name)
 
-      Map.update(acc, key, workflow_state, &merge_workflow_state(&1, workflow_state))
+      if Map.has_key?(acc, key) do
+        Map.update!(acc, key, &merge_workflow_state(&1, workflow_state))
+      else
+        acc
+      end
     end)
   end
 
@@ -2471,25 +2436,6 @@ defmodule SymphonyElixir.PitchAIPM.Client do
 
   defp prefer_workflow_value(_key, default_value, nil), do: default_value
   defp prefer_workflow_value(_key, _default_value, workflow_value), do: workflow_value
-
-  defp merge_task_states(states, state_names) do
-    Enum.reduce(state_names, states, fn state_name, acc ->
-      key = normalize_state_key(state_name)
-
-      Map.put_new(acc, key, %{
-        state_name: state_name,
-        category: "project",
-        color: "#64748b",
-        sort_order: inferred_state_sort_order(state_name),
-        is_active: false,
-        is_terminal: false,
-        is_visible_button: true,
-        next_state_name: nil,
-        description: nil,
-        metadata: %{}
-      })
-    end)
-  end
 
   defp fetch_board_task_context(task_id) do
     sql = """
@@ -2591,22 +2537,7 @@ defmodule SymphonyElixir.PitchAIPM.Client do
     end
   end
 
-  defp hidden_board_state?(state, terminal_states) do
-    category =
-      case clean_string(state.category) do
-        nil -> "project"
-        value -> String.downcase(value)
-      end
-
-    normalize_state_key(state.state_name) in terminal_states or
-      state.is_terminal == true or
-      state.is_visible_button == false or
-      category in ["merge", "rework", "terminal"]
-  end
-
-  defp inferred_state_sort_order(state_name) do
-    Map.get(@state_sort_orders, normalize_state_key(state_name), 500)
-  end
+  defp hidden_board_state?(state), do: state.is_visible_button == false
 
   defp decode_blockers(value) when is_binary(value) do
     case Jason.decode(value) do

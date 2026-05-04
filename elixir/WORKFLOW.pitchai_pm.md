@@ -5,13 +5,11 @@ tracker:
   assignee: "symphony"
   active_states:
     - Todo
-    - Symphony Ready
     - In Progress
     - Merging
     - Rework
   terminal_states:
     - Done
-    - Closed
     - Cancelled
     - Canceled
     - Duplicate
@@ -97,17 +95,17 @@ Supported operations:
 
 ## Status Map
 
-- `Backlog` -> out of scope for this workflow; do not modify.
+- `Backlog`, `Idea`, `Open`, and `Enriched` are retired aliases for `Suggested`; do not set tasks to any of these values.
 - `Suggested` -> intake/proposal; do not work until it is promoted to `Todo`.
-- `Todo` or `Not Started` -> queued for Symphony; immediately transition to `In Progress` before active work.
-- `Symphony Ready` -> unattended Symphony queue; immediately transition to `In Progress` before active work.
+- `Todo` -> queued for Symphony; immediately transition to `In Progress` before active work.
+- `Ready` and `Symphony Ready` are legacy aliases for `Todo`; do not set tasks to either value.
 - `Active` or `Symphony Active` -> aliases for `In Progress`; implementation is actively underway.
 - `In Progress` -> implementation actively underway. The orchestrator only dispatches In Progress tasks assigned to `symphony`.
 - `Human Review` -> PR is attached and validated; waiting on human approval. Do not code.
 - `Merging` -> approved by human; execute the `land` skill flow.
 - `Rework` -> reviewer requested changes; planning and implementation required.
 - `Blocked` -> true blocker recorded; do not continue until unblocked.
-- `Done` -> terminal state; no further action required.
+- `Done` -> terminal state after human review and merge, or after non-code/meta work that genuinely needs no PR.
 
 ## Blocker Reconciliation Agent
 
@@ -128,7 +126,7 @@ If this task description or orchestration metadata has `symphony_kind = blocker_
 
 1. Fetch the task by explicit ID using `pitchai_pm`.
 2. Read the current state.
-3. If current state is `Todo`, `Not Started`, or `Symphony Ready`, call `pitchai_pm.update_task_state` to set it to `In Progress`.
+3. If current state is `Todo`, call `pitchai_pm.update_task_state` to set it to `In Progress`.
 4. Find the existing workpad with `pitchai_pm.get_workpad`.
 5. If missing or outdated, write a `## Codex Workpad` using `pitchai_pm.upsert_workpad`.
 6. Start by writing or updating a concrete hierarchical plan in that workpad.

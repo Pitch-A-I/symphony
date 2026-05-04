@@ -208,12 +208,26 @@ defmodule SymphonyElixir.ExtensionsTest do
              task_count: 0,
              hidden?: false,
              tasks: []
+           },
+           %{
+             state_name: "Merging",
+             color: "#059669",
+             task_count: 0,
+             hidden?: false,
+             tasks: []
+           },
+           %{
+             state_name: "Done",
+             color: "#6366f1",
+             task_count: 12,
+             hidden?: false,
+             tasks: []
            }
          ],
          hidden_columns: [
            %{state_name: "Rework", color: "#dc2626", task_count: 0, hidden?: true, tasks: []},
-           %{state_name: "Merging", color: "#059669", task_count: 0, hidden?: true, tasks: []},
-           %{state_name: "Done", color: "#6366f1", task_count: 12, hidden?: true, tasks: []}
+           %{state_name: "Cancelled", color: "#94a3b8", task_count: 0, hidden?: true, tasks: []},
+           %{state_name: "Duplicate", color: "#94a3b8", task_count: 0, hidden?: true, tasks: []}
          ]
        }}
     end
@@ -1004,6 +1018,8 @@ defmodule SymphonyElixir.ExtensionsTest do
     assert html =~ "Todo"
     assert html =~ "In Progress"
     assert html =~ "Human Review"
+    assert html =~ "Merging"
+    assert html =~ "Done"
     assert html =~ "TODO App"
     assert html =~ "MT-BLOCK"
     assert html =~ "3 downstream"
@@ -1011,8 +1027,9 @@ defmodule SymphonyElixir.ExtensionsTest do
     assert html =~ "No application source files are present in the provided workspace."
     refute html =~ "Hidden columns"
     refute html =~ "Rework"
-    refute html =~ "Merging"
-    refute html =~ "Done"
+    refute html =~ "Cancelled"
+    refute html =~ "Duplicate"
+    refute html =~ "Symphony Ready"
     assert html =~ "state-spinner"
     assert html =~ "data-drop-state=\"Todo\""
     assert html =~ "MT-HTTP"
@@ -1066,8 +1083,8 @@ defmodule SymphonyElixir.ExtensionsTest do
     hidden_html = render_click(view, "toggle_hidden_columns")
     assert hidden_html =~ "Hidden columns"
     assert hidden_html =~ "Rework"
-    assert hidden_html =~ "Merging"
-    assert hidden_html =~ "Done"
+    assert hidden_html =~ "Cancelled"
+    assert hidden_html =~ "Duplicate"
 
     detail = render_click(view, "open_task", %{"task_id" => "issue-http"})
     assert detail =~ "phx-hook=\"ModalScrollLock\""

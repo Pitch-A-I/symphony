@@ -100,7 +100,7 @@ defmodule SymphonyElixir.TestSupport do
           tracker_database_url: nil,
           tracker_assignee: nil,
           tracker_active_states: ["Todo", "In Progress"],
-          tracker_terminal_states: ["Closed", "Cancelled", "Canceled", "Duplicate", "Done"],
+          tracker_terminal_states: ["Done", "Cancelled", "Canceled", "Duplicate"],
           poll_interval_ms: 30_000,
           workspace_root: Path.join(System.tmp_dir!(), "symphony_workspaces"),
           worker_ssh_hosts: [],
