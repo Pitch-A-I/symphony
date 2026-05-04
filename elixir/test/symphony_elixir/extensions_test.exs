@@ -338,7 +338,14 @@ defmodule SymphonyElixir.ExtensionsTest do
              "created_at" => "2026-05-02T13:00:00Z"
            }
          ],
-         blockers: [],
+         blockers: [
+           %{
+             "id" => "issue-suggested",
+             "identifier" => "MT-SUG",
+             "title" => "Summarize feedback from Slack",
+             "state" => "Suggested"
+           }
+         ],
          created_at: "2026-05-01T13:00:00Z",
          updated_at: "2026-05-02T13:00:00Z"
        }}
@@ -1044,11 +1051,22 @@ defmodule SymphonyElixir.ExtensionsTest do
     assert blocked_detail =~ "Blocked in unattended Symphony session"
     refute blocked_detail =~ "Workspace was bootstrapped"
     assert blocked_detail =~ "Blockers"
+    assert blocked_detail =~ "Blocked by"
+    assert blocked_detail =~ "MT-SUG"
+    assert blocked_detail =~ "Move to Todo"
 
     Application.put_env(:symphony_elixir, :pitchai_pm_test_recipient, self())
     render_hook(view, "move_task", %{"task_id" => "issue-todo", "target_state" => "Human Review"})
 
     assert_receive {:pitchai_pm_move_issue_on_board, "issue-todo", "Human Review", %{after_task_id: nil, before_task_id: nil, reason: "kanban_drag_drop"}}
+
+    render_click(view, "move_task_to_todo", %{"task_id" => "issue-blocked"})
+
+    assert_receive {:pitchai_pm_move_issue_on_board, "issue-blocked", "Todo", %{reason: "modal_move_to_todo"}}
+
+    render_click(view, "focus_task_card", %{"task_id" => "issue-suggested"})
+    assert_push_event(view, "focus-task-card", %{task_id: "issue-suggested"})
+    refute render(view) =~ "task-detail-backdrop"
 
     rendered = render_click(view, "refresh")
     refute rendered =~ "TODO App / Issues"

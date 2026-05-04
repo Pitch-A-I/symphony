@@ -28,6 +28,78 @@ defmodule SymphonyElixirWeb.Layouts do
 
             if (!window.Phoenix || !window.LiveView) return;
 
+            function taskCardSelector(taskId) {
+              var escaped =
+                window.CSS && window.CSS.escape
+                  ? window.CSS.escape(taskId)
+                  : taskId.replace(/["\\]/g, "\\$&");
+
+              return '.ticket-card[data-task-id="' + escaped + '"]';
+            }
+
+            function focusTaskCard(taskId, attempt) {
+              if (document.querySelector("#task-detail-backdrop") && attempt < 12) {
+                window.setTimeout(function () {
+                  focusTaskCard(taskId, attempt + 1);
+                }, 80);
+                return;
+              }
+
+              var board = document.getElementById("kanban-board");
+              var card = (board || document).querySelector(taskCardSelector(taskId));
+
+              if (!card && attempt < 12) {
+                window.setTimeout(function () {
+                  focusTaskCard(taskId, attempt + 1);
+                }, 80);
+                return;
+              }
+
+              if (!card) return;
+
+              card.scrollIntoView({behavior: "smooth", block: "center", inline: "center"});
+              window.focusedTaskTarget = {
+                taskId: taskId,
+                expiresAt: Date.now() + 4200
+              };
+
+              markFocusedTaskCard(card, taskId);
+            }
+
+            function markFocusedTaskCard(card, taskId) {
+              card.classList.add("is-focus-target");
+
+              if (!card.hasAttribute("tabindex")) {
+                card.setAttribute("tabindex", "-1");
+              }
+
+              window.setTimeout(function () {
+                card.focus({preventScroll: true});
+              }, 260);
+
+              if (card.focusTargetTimer) {
+                window.clearTimeout(card.focusTargetTimer);
+              }
+
+              card.focusTargetTimer = window.setTimeout(function () {
+                card.classList.remove("is-focus-target");
+                if (window.focusedTaskTarget && window.focusedTaskTarget.taskId === taskId) {
+                  window.focusedTaskTarget = null;
+                }
+              }, 3600);
+            }
+
+            function restoreFocusedTaskCard() {
+              var target = window.focusedTaskTarget;
+              if (!target || Date.now() > target.expiresAt) return;
+
+              var board = document.getElementById("kanban-board");
+              var card = (board || document).querySelector(taskCardSelector(target.taskId));
+              if (!card) return;
+
+              markFocusedTaskCard(card, target.taskId);
+            }
+
             var Hooks = {};
 
             Hooks.ModalScrollLock = {
@@ -38,7 +110,9 @@ defmodule SymphonyElixirWeb.Layouts do
                 this.previousBodyWidth = document.body.style.width;
                 this.previousBodyOverflow = document.body.style.overflow;
                 this.handleWheel = this.handleWheel.bind(this);
+                this.handleBlockerFocusClick = this.handleBlockerFocusClick.bind(this);
                 this.el.addEventListener("wheel", this.handleWheel, {passive: false});
+                this.el.addEventListener("click", this.handleBlockerFocusClick, true);
 
                 document.body.classList.add("has-modal-open");
                 document.body.style.position = "fixed";
@@ -52,6 +126,7 @@ defmodule SymphonyElixirWeb.Layouts do
 
               destroyed: function () {
                 this.el.removeEventListener("wheel", this.handleWheel);
+                this.el.removeEventListener("click", this.handleBlockerFocusClick, true);
                 document.body.classList.remove("has-modal-open");
                 document.body.style.position = this.previousBodyPosition || "";
                 document.body.style.top = this.previousBodyTop || "";
@@ -64,6 +139,18 @@ defmodule SymphonyElixirWeb.Layouts do
                 if (!event.target.closest(".detail-modal, .create-modal")) {
                   event.preventDefault();
                 }
+              },
+
+              handleBlockerFocusClick: function (event) {
+                var trigger = event.target.closest("[data-focus-task-id]");
+                if (!trigger || !this.el.contains(trigger)) return;
+
+                var taskId = trigger.getAttribute("data-focus-task-id");
+                if (!taskId) return;
+
+                window.setTimeout(function () {
+                  focusTaskCard(taskId, 0);
+                }, 80);
               }
             };
 
@@ -73,8 +160,12 @@ defmodule SymphonyElixirWeb.Layouts do
                 this.handlePointerMove = this.handlePointerMove.bind(this);
                 this.handlePointerUp = this.handlePointerUp.bind(this);
                 this.handleClick = this.handleClick.bind(this);
+                this.handleFocusTaskCard = this.handleFocusTaskCard.bind(this);
+                this.handleFocusTaskCardBrowserEvent = this.handleFocusTaskCardBrowserEvent.bind(this);
                 this.el.addEventListener("pointerdown", this.handlePointerDown);
                 this.el.addEventListener("click", this.handleClick, true);
+                window.addEventListener("phx:focus-task-card", this.handleFocusTaskCardBrowserEvent);
+                this.handleEvent("focus-task-card", this.handleFocusTaskCard);
               },
 
               destroyed: function () {
@@ -82,10 +173,12 @@ defmodule SymphonyElixirWeb.Layouts do
                 this.teardownPendingDrag();
                 this.el.removeEventListener("pointerdown", this.handlePointerDown);
                 this.el.removeEventListener("click", this.handleClick, true);
+                window.removeEventListener("phx:focus-task-card", this.handleFocusTaskCardBrowserEvent);
               },
 
               updated: function () {
                 this.restoreDragDomAfterPatch();
+                restoreFocusedTaskCard();
               },
 
               handlePointerDown: function (event) {
@@ -129,6 +222,17 @@ defmodule SymphonyElixirWeb.Layouts do
                 event.preventDefault();
                 event.stopPropagation();
                 this.pushEvent("open_task", {task_id: taskId});
+              },
+
+              handleFocusTaskCard: function (payload) {
+                var taskId = payload && payload.task_id;
+                if (!taskId) return;
+
+                focusTaskCard(String(taskId), 0);
+              },
+
+              handleFocusTaskCardBrowserEvent: function (event) {
+                this.handleFocusTaskCard(event.detail || {});
               },
 
               startDrag: function (event) {

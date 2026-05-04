@@ -154,7 +154,7 @@ defmodule SymphonyElixirWeb.Presenter do
       when is_binary(task_id) and is_binary(state_name) and is_map(opts) do
     case Config.settings!().tracker.kind do
       "pitchai_pm" ->
-        pitchai_pm_client().move_issue_on_board(task_id, state_name, Map.put(opts, :reason, "kanban_drag_drop"))
+        pitchai_pm_client().move_issue_on_board(task_id, state_name, Map.put_new(opts, :reason, "kanban_drag_drop"))
 
       other ->
         {:error, {:unsupported_board_tracker, other}}

@@ -150,6 +150,34 @@ defmodule SymphonyElixirWeb.BoardLive do
   end
 
   @impl true
+  def handle_event("move_task_to_todo", %{"task_id" => task_id}, socket) do
+    target_state = "Todo"
+
+    if valid_board_state?(socket.assigns.payload, target_state) do
+      case Presenter.move_board_task(task_id, target_state, %{reason: "modal_move_to_todo"}) do
+        :ok ->
+          {:noreply, reload_board(socket)}
+
+        {:error, reason} ->
+          {:noreply,
+           socket
+           |> put_flash(:error, "Move to Todo failed: #{inspect(reason, pretty: false)}")
+           |> reload_board()}
+      end
+    else
+      {:noreply, put_flash(socket, :error, "Move to Todo failed: Todo column unavailable")}
+    end
+  end
+
+  @impl true
+  def handle_event("focus_task_card", %{"task_id" => task_id}, socket) do
+    {:noreply,
+     socket
+     |> assign(:selected_task, nil)
+     |> push_event("focus-task-card", %{task_id: task_id})}
+  end
+
+  @impl true
   def handle_info(:board_tick, socket) do
     schedule_board_tick()
     {:noreply, start_async_board_reload(socket)}
@@ -454,8 +482,33 @@ defmodule SymphonyElixirWeb.BoardLive do
           <p :if={@task.description_text} class="detail-description"><%= @task.description_text %></p>
 
           <% detail_chips = detail_chips(@task) %>
-          <div :if={detail_chips != []} class="detail-inline-meta">
-            <span :for={chip <- detail_chips} class="detail-chip"><%= chip %></span>
+          <% blocker_refs = task_blocker_refs(@task) %>
+          <div :if={detail_chips != [] or blocker_refs != [] or show_move_to_todo?(@task)} class="detail-quick-row">
+            <div class="detail-inline-meta">
+              <span :for={chip <- detail_chips} class="detail-chip"><%= chip %></span>
+              <span :if={blocker_refs != []} class="detail-inline-label">Blocked by</span>
+              <button
+                :for={blocker <- blocker_refs}
+                type="button"
+                class="blocker-ref-chip"
+                data-focus-task-id={blocker.id}
+                phx-click="focus_task_card"
+                phx-value-task_id={blocker.id}
+                title={blocker.title}
+              >
+                <span><%= blocker.identifier %></span>
+                <small><%= state_label(blocker.state) %></small>
+              </button>
+            </div>
+            <button
+              :if={show_move_to_todo?(@task)}
+              type="button"
+              class="detail-todo-action"
+              phx-click="move_task_to_todo"
+              phx-value-task_id={@task.id}
+            >
+              Move to Todo
+            </button>
           </div>
 
           <section :if={blocked_reason(@task)} class="blocked-reason-panel" aria-label="Blocked reason">
@@ -1027,6 +1080,41 @@ defmodule SymphonyElixirWeb.BoardLive do
 
     priority_chip ++ Enum.take(visible_labels(Map.get(task, :labels)), 4)
   end
+
+  defp task_blocker_refs(%{blockers: blockers}) when is_list(blockers) do
+    blockers
+    |> Enum.map(&normalize_task_ref/1)
+    |> Enum.reject(&is_nil/1)
+  end
+
+  defp task_blocker_refs(_task), do: []
+
+  defp normalize_task_ref(blocker) when is_map(blocker) do
+    id = blocker |> map_value(:id) |> normalize_optional_string()
+
+    if is_nil(id) do
+      nil
+    else
+      %{
+        id: id,
+        identifier: blocker |> map_value(:identifier) |> normalize_optional_string() || short_task_identifier(id),
+        title: blocker |> map_value(:title) |> normalize_optional_string() || "Blocked task",
+        state: blocker |> map_value(:state) |> normalize_optional_string() || "No state"
+      }
+    end
+  end
+
+  defp normalize_task_ref(_blocker), do: nil
+
+  defp show_move_to_todo?(task) when is_map(task) do
+    normalize_state(Map.get(task, :state)) != "todo"
+  end
+
+  defp show_move_to_todo?(_task), do: false
+
+  defp map_value(map, key) when is_map(map), do: Map.get(map, key) || Map.get(map, to_string(key))
+
+  defp short_task_identifier(task_id) when is_binary(task_id), do: "PM-" <> String.slice(task_id, 0, 8)
 
   defp runtime_value(nil, _key), do: nil
   defp runtime_value(runtime, key) when is_map(runtime), do: Map.get(runtime, key) || Map.get(runtime, to_string(key))
