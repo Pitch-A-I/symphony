@@ -311,13 +311,14 @@ defmodule SymphonyElixir.Orchestrator do
 
   defp log_blocker_reconcile_result(result) when is_map(result) do
     if Map.get(result, :created_blocker_tasks, 0) > 0 or
+         Map.get(result, :released_resolved_blocked_tasks, 0) > 0 or
          Map.get(result, :reopened_blocker_tasks, 0) > 0 or
          Map.get(result, :merged_duplicate_blocker_tasks, 0) > 0 or
          Map.get(result, :linked_dependencies, 0) > 0 or
          Map.get(result, :created_reconciliation_agent_tasks, 0) > 0 or
          Map.get(result, :updated_reconciliation_agent_tasks, 0) > 0 do
       Logger.info(
-        "Reconciled PitchAI PM blockers: groups=#{Map.get(result, :groups, 0)} blocked_tasks=#{Map.get(result, :blocked_tasks, 0)} created=#{Map.get(result, :created_blocker_tasks, 0)} reopened=#{Map.get(result, :reopened_blocker_tasks, 0)} duplicates=#{Map.get(result, :merged_duplicate_blocker_tasks, 0)} linked=#{Map.get(result, :linked_dependencies, 0)} reconciliation_agents_created=#{Map.get(result, :created_reconciliation_agent_tasks, 0)} reconciliation_agents_updated=#{Map.get(result, :updated_reconciliation_agent_tasks, 0)}"
+        "Reconciled PitchAI PM blockers: groups=#{Map.get(result, :groups, 0)} blocked_tasks=#{Map.get(result, :blocked_tasks, 0)} released=#{Map.get(result, :released_resolved_blocked_tasks, 0)} created=#{Map.get(result, :created_blocker_tasks, 0)} reopened=#{Map.get(result, :reopened_blocker_tasks, 0)} duplicates=#{Map.get(result, :merged_duplicate_blocker_tasks, 0)} linked=#{Map.get(result, :linked_dependencies, 0)} reconciliation_agents_created=#{Map.get(result, :created_reconciliation_agent_tasks, 0)} reconciliation_agents_updated=#{Map.get(result, :updated_reconciliation_agent_tasks, 0)}"
       )
     end
   end
@@ -668,16 +669,18 @@ defmodule SymphonyElixir.Orchestrator do
        )
        when is_binary(issue_state) and is_list(blockers) do
     normalize_issue_state(issue_state) == "todo" and
-      Enum.any?(blockers, fn
-        %{state: blocker_state} when is_binary(blocker_state) ->
-          !terminal_issue_state?(blocker_state, terminal_states)
-
-        _ ->
-          true
-      end)
+      Enum.any?(blockers, &blocker_non_terminal?(&1, terminal_states))
   end
 
   defp todo_issue_blocked_by_non_terminal?(_issue, _terminal_states), do: false
+
+  defp blocker_non_terminal?(%{state: blocker_state}, terminal_states) when is_binary(blocker_state),
+    do: !terminal_issue_state?(blocker_state, terminal_states)
+
+  defp blocker_non_terminal?(%{"state" => blocker_state}, terminal_states) when is_binary(blocker_state),
+    do: !terminal_issue_state?(blocker_state, terminal_states)
+
+  defp blocker_non_terminal?(_blocker, _terminal_states), do: true
 
   defp terminal_issue_state?(state_name, terminal_states) when is_binary(state_name) do
     MapSet.member?(terminal_states, normalize_issue_state(state_name))

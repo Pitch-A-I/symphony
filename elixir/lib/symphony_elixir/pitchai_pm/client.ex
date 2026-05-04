@@ -462,8 +462,11 @@ defmodule SymphonyElixir.PitchAIPM.Client do
     with {:ok, project_id} <- board_project_id(),
          {:ok, project} <- fetch_board_project(project_id),
          {:ok, projects} <- fetch_board_scope_projects(project),
+         {:ok, released_count} <- release_resolved_blocked_tasks(Enum.map(projects, & &1.id)),
          {:ok, blocked_tasks} <- fetch_blocked_tasks(Enum.map(projects, & &1.id)) do
-      reconcile_blocked_task_groups(blocked_tasks)
+      with {:ok, result} <- reconcile_blocked_task_groups(blocked_tasks) do
+        {:ok, Map.put(result, :released_resolved_blocked_tasks, released_count)}
+      end
     end
   end
 
@@ -531,6 +534,70 @@ defmodule SymphonyElixir.PitchAIPM.Client do
 
     with {:ok, result} <- query(sql, [scope_project_ids]) do
       {:ok, Enum.map(result.rows, &blocked_task_row_to_map(result.columns, &1))}
+    end
+  end
+
+  defp release_resolved_blocked_tasks(scope_project_ids) when is_list(scope_project_ids) do
+    sql = """
+    with candidates as (
+      select t.id, t.state_name
+      from public.tasks t
+      where t.project_id::text = any($1::text[])
+        and lower(trim(coalesce(t.state_name, ''))) = 'blocked'
+        and exists (
+          select 1
+          from pitchai_symphony.task_dependencies dep
+          where dep.task_id = t.id
+            and dep.relation_type = 'blocked_by'
+        )
+        and not exists (
+          select 1
+          from pitchai_symphony.task_dependencies dep
+          join public.tasks blocker on blocker.id = dep.blocker_task_id
+          where dep.task_id = t.id
+            and dep.relation_type = 'blocked_by'
+            and not (lower(trim(coalesce(blocker.state_name, ''))) = any($2::text[]))
+        )
+    ),
+    updated_tasks as (
+      update public.tasks t
+      set state_name = 'Todo',
+          updated_at = now()
+      from candidates c
+      where t.id = c.id
+      returning t.id, c.state_name as from_state, t.state_name as to_state
+    ),
+    state_events as (
+      insert into pitchai_symphony.task_state_events(task_id, from_state, to_state, actor, reason, metadata)
+      select
+        id,
+        from_state,
+        to_state,
+        'symphony',
+        'resolved_blocker_release',
+        jsonb_build_object('source', $3::text)
+      from updated_tasks
+      where from_state is distinct from to_state
+      returning task_id
+    ),
+    comments as (
+      insert into pitchai_symphony.task_comments(task_id, body, author, kind, metadata)
+      select
+        id,
+        'Moved back to Todo because every linked blocker task is now terminal.',
+        'symphony',
+        'blocker_release',
+        jsonb_build_object('source', $3::text)
+      from updated_tasks
+      returning task_id
+    )
+    select count(*)::integer
+    from updated_tasks
+    """
+
+    case query(sql, [scope_project_ids, terminal_state_keys(), @blocker_reconciler_source]) do
+      {:ok, %{rows: [[released_count]]}} -> {:ok, released_count}
+      {:error, reason} -> {:error, reason}
     end
   end
 
@@ -804,7 +871,10 @@ defmodule SymphonyElixir.PitchAIPM.Client do
       "instructions" => [
         "Call list_blocked_tasks first and compare it with this snapshot.",
         "Use semantic judgment to unify equivalent blockers even when their text differs.",
-        "Create one canonical Suggested blocker task per distinct true blocker.",
+        "Create one canonical Suggested blocker task per distinct unresolved true blocker.",
+        "Never reopen a terminal canonical blocker task. Terminal blocker states mean that blocker was resolved.",
+        "If a blocked task only points to terminal blocker tasks, move that task back to Todo instead of reopening the blocker.",
+        "If a task is blocked again by a new reason after an old blocker was resolved, create or link a new canonical blocker task for the new blocker.",
         "Use link_task_dependency so every blocked task points at its canonical blocker task.",
         "Use merge_duplicate_blocker_task when multiple blocker tasks describe the same blocker.",
         "Do not mark this reconciliation task Done until dependencies and duplicate states are written."
@@ -870,7 +940,7 @@ defmodule SymphonyElixir.PitchAIPM.Client do
     from public.tasks t
     join pitchai_symphony.task_tracking tr on tr.task_id = t.id
     where t.project_id = $1::text::uuid
-      and lower(trim(coalesce(t.state_name, ''))) <> 'duplicate'
+      and not (lower(trim(coalesce(t.state_name, ''))) = any($3::text[]))
       and coalesce(
         tr.metadata->>'symphony_kind',
         case when jsonb_typeof(tr.metadata) = 'string' then ((tr.metadata #>> '{}')::jsonb)->>'symphony_kind' end
@@ -880,7 +950,6 @@ defmodule SymphonyElixir.PitchAIPM.Client do
         case when jsonb_typeof(tr.metadata) = 'string' then ((tr.metadata #>> '{}')::jsonb)->>'blocker_key' end
       ) = $2::text
     order by
-      case when lower(trim(coalesce(t.state_name, ''))) = any($3::text[]) then 1 else 0 end,
       t.updated_at desc nulls last,
       t.created_at desc nulls last
     """
@@ -966,10 +1035,6 @@ defmodule SymphonyElixir.PitchAIPM.Client do
     updated_task as (
       update public.tasks t
       set description = coalesce(t.description, '{}'::jsonb) || $2::text::jsonb,
-          state_name = case
-            when lower(trim(coalesce(t.state_name, ''))) = any($3::text[]) then 'Suggested'
-            else t.state_name
-          end,
           updated_at = now()
       from current_task c
       where t.id = c.id
@@ -981,7 +1046,7 @@ defmodule SymphonyElixir.PitchAIPM.Client do
     ),
     tracking as (
       insert into pitchai_symphony.task_tracking(task_id, priority, assignee, labels, metadata)
-      select id, 1, 'symphony', $4::text[], $5::text::jsonb
+      select id, 1, 'symphony', $3::text[], $4::text::jsonb
       from updated_task
       on conflict (task_id)
       do update set
@@ -994,37 +1059,20 @@ defmodule SymphonyElixir.PitchAIPM.Client do
         metadata = pitchai_symphony.task_tracking.metadata || excluded.metadata,
         updated_at = now()
       returning task_id
-    ),
-    state_event as (
-      insert into pitchai_symphony.task_state_events(task_id, from_state, to_state, actor, reason, metadata)
-      select
-        id,
-        from_state,
-        to_state,
-        'symphony',
-        'blocker_reconciler_reopened',
-        jsonb_build_object('source', $6::text, 'blocker_key', $7::text)
-      from updated_task
-      where lower(trim(coalesce(from_state, ''))) = any($3::text[])
-        and from_state is distinct from to_state
-      returning task_id
     )
     select
       id::text,
       identifier,
       to_state,
-      exists(select 1 from state_event) as reopened
+      false as reopened
     from updated_task
     """
 
     params = [
       blocker_task.id,
       Jason.encode!(description),
-      terminal_state_keys(),
       @blocker_task_labels,
-      Jason.encode!(metadata),
-      @blocker_reconciler_source,
-      group.blocker_key
+      Jason.encode!(metadata)
     ]
 
     case query(sql, params) do
@@ -1823,6 +1871,7 @@ defmodule SymphonyElixir.PitchAIPM.Client do
   defp tool_update_task_state(params) do
     with {:ok, task_id} <- required_string(params, "task_id"),
          {:ok, state_name} <- required_string(params, "state_name"),
+         :ok <- validate_tool_state_transition(task_id, state_name),
          :ok <- update_issue_state(task_id, state_name, string_param(params, "reason") || "tool_update_task_state"),
          {:ok, [issue]} <- fetch_issue_states_by_ids([task_id]) do
       {:ok, %{"task" => issue_to_map(issue)}}
@@ -1831,6 +1880,45 @@ defmodule SymphonyElixir.PitchAIPM.Client do
       {:error, reason} -> {:error, reason}
     end
   end
+
+  defp validate_tool_state_transition(task_id, state_name) when is_binary(task_id) and is_binary(state_name) do
+    target_state = normalize_state_key(state_name)
+
+    if target_state in terminal_state_keys() do
+      :ok
+    else
+      validate_non_terminal_tool_state_transition(task_id)
+    end
+  end
+
+  defp validate_non_terminal_tool_state_transition(task_id) do
+    sql = """
+    select
+      t.state_name,
+      coalesce(
+        tr.metadata->>'symphony_kind',
+        case when jsonb_typeof(tr.metadata) = 'string' then ((tr.metadata #>> '{}')::jsonb)->>'symphony_kind' end
+      ) as symphony_kind
+    from public.tasks t
+    left join pitchai_symphony.task_tracking tr on tr.task_id = t.id
+    where t.id = $1::text::uuid
+    """
+
+    case query(sql, [task_id]) do
+      {:ok, %{rows: rows}} -> validate_non_terminal_tool_state_rows(rows)
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  defp validate_non_terminal_tool_state_rows([[current_state, "blocker_task"]]) do
+    case normalize_state_key(current_state) in terminal_state_keys() do
+      true -> {:error, :cannot_reopen_terminal_blocker_task}
+      false -> :ok
+    end
+  end
+
+  defp validate_non_terminal_tool_state_rows([[_current_state, _symphony_kind]]), do: :ok
+  defp validate_non_terminal_tool_state_rows([]), do: {:error, :task_not_found}
 
   defp tool_append_changelog(params) do
     with {:ok, task_id} <- required_string(params, "task_id"),

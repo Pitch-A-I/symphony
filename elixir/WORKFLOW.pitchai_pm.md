@@ -115,10 +115,13 @@ If this task description or orchestration metadata has `symphony_kind = blocker_
 1. Run `pitchai_pm.list_blocked_tasks` first.
 2. Run `pitchai_pm.list_blocker_tasks` and compare existing canonical blocker tasks with the blocked-task snapshot.
 3. Use semantic judgment to unify equivalent blockers even when different blocked tasks describe the same root cause with different wording.
-4. For each distinct true blocker, reuse the best existing canonical blocker task or create one with `pitchai_pm.create_task` using `state_name = Suggested`, labels `["auto-blocker", "blocker", "symphony"]`, and metadata including `{"managed_by":"pitchai_symphony","symphony_kind":"blocker_task","blocker_key":"<stable-key>"}`.
-5. Use `pitchai_pm.link_task_dependency` so every blocked task depends on exactly the right canonical blocker task.
-6. Use `pitchai_pm.merge_duplicate_blocker_task` for duplicate blocker tasks. Keep the clearest task as canonical.
-7. Append a changelog summary to this reconciliation task and move it to `Done` only after the PM DB writes are complete.
+4. Never reopen a terminal canonical blocker task. Terminal blocker states mean that blocker was resolved.
+5. If a blocked task only points to terminal blocker tasks, move that task back to `Todo` instead of reopening the blocker.
+6. If a task is blocked again by a new reason after an old blocker was resolved, create or link a new canonical blocker task for the new blocker.
+7. For each distinct unresolved true blocker, reuse the best existing nonterminal canonical blocker task or create one with `pitchai_pm.create_task` using `state_name = Suggested`, labels `["auto-blocker", "blocker", "symphony"]`, and metadata including `{"managed_by":"pitchai_symphony","symphony_kind":"blocker_task","blocker_key":"<stable-key>"}`.
+8. Use `pitchai_pm.link_task_dependency` so every blocked task depends on exactly the right canonical blocker task.
+9. Use `pitchai_pm.merge_duplicate_blocker_task` for duplicate blocker tasks. Keep the clearest task as canonical.
+10. Append a changelog summary to this reconciliation task and move it to `Done` only after the PM DB writes are complete.
 
 ## Required Start Sequence
 

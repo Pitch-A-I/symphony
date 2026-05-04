@@ -45,6 +45,7 @@ defmodule SymphonyElixir.ExtensionsTest do
        %{
          groups: 0,
          blocked_tasks: 0,
+         released_resolved_blocked_tasks: 0,
          created_blocker_tasks: 0,
          reopened_blocker_tasks: 0,
          merged_duplicate_blocker_tasks: 0,
