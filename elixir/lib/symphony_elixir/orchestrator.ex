@@ -15,6 +15,8 @@ defmodule SymphonyElixir.Orchestrator do
   @failure_retry_base_ms 10_000
   # Slightly above the dashboard render interval so "checking now…" can render.
   @poll_transition_render_delay_ms 20
+  @recent_codex_event_limit 80
+  @recent_codex_stream_char_limit 4_000
   @empty_codex_totals %{
     input_tokens: 0,
     output_tokens: 0,
@@ -1310,18 +1312,159 @@ defmodule SymphonyElixir.Orchestrator do
   end
 
   defp recent_codex_events_for_update(events, update) when is_list(events) do
-    event = %{
-      event: update[:event],
-      timestamp: update[:timestamp],
-      method: payload_method(update_payload(update)),
-      message: StatusDashboard.humanize_codex_message(summarize_codex_update(update))
-    }
+    event = recent_codex_event(update)
 
-    [event | events]
-    |> Enum.take(12)
+    events
+    |> merge_recent_codex_event(event)
+    |> Enum.take(@recent_codex_event_limit)
   end
 
   defp recent_codex_events_for_update(_events, update), do: recent_codex_events_for_update([], update)
+
+  defp recent_codex_event(update) do
+    payload = update_payload(update)
+    method = payload_method(payload)
+
+    base_event = %{
+      event: update[:event],
+      timestamp: update[:timestamp],
+      method: method
+    }
+
+    case assistant_stream_delta(method, payload) do
+      {:ok, delta, stream_id} ->
+        stream_text = truncate_stream_text(delta)
+
+        Map.merge(base_event, %{
+          message: assistant_stream_message(stream_text),
+          stream_kind: "assistant_message",
+          stream_id: stream_id,
+          stream_text: stream_text,
+          stream_delta_count: 1
+        })
+
+      :error ->
+        Map.put(base_event, :message, StatusDashboard.humanize_codex_message(summarize_codex_update(update)))
+    end
+  end
+
+  defp merge_recent_codex_event([head | tail], %{stream_kind: "assistant_message"} = event) do
+    if matching_assistant_stream?(head, event) do
+      [merge_assistant_stream_event(head, event) | tail]
+    else
+      [event, head | tail]
+    end
+  end
+
+  defp merge_recent_codex_event(events, event), do: [event | events]
+
+  defp matching_assistant_stream?(head, event) do
+    stream_kind = Map.get(head, :stream_kind) || Map.get(head, "stream_kind")
+
+    if stream_kind == "assistant_message" do
+      existing_id = Map.get(head, :stream_id) || Map.get(head, "stream_id")
+      new_id = Map.get(event, :stream_id)
+
+      is_nil(existing_id) or is_nil(new_id) or existing_id == new_id
+    else
+      false
+    end
+  end
+
+  defp merge_assistant_stream_event(head, event) do
+    stream_text =
+      head
+      |> stream_text_from_event()
+      |> then(&(&1 <> Map.fetch!(event, :stream_text)))
+      |> truncate_stream_text()
+
+    %{
+      event
+      | message: assistant_stream_message(stream_text),
+        stream_text: stream_text,
+        stream_delta_count: stream_delta_count(head) + 1
+    }
+  end
+
+  defp assistant_stream_delta(method, payload)
+       when method in [
+              "item/agentMessage/delta",
+              "codex/event/agent_message_delta",
+              "codex/event/agent_message_content_delta"
+            ] do
+    case extract_first_path(payload, assistant_stream_delta_paths()) do
+      delta when is_binary(delta) and delta != "" -> {:ok, delta, assistant_stream_id(payload)}
+      _delta -> :error
+    end
+  end
+
+  defp assistant_stream_delta(_method, _payload), do: :error
+
+  defp assistant_stream_message(stream_text), do: "assistant draft: #{stream_text}"
+
+  defp stream_text_from_event(event) do
+    Map.get(event, :stream_text) || Map.get(event, "stream_text") || ""
+  end
+
+  defp stream_delta_count(event) do
+    case Map.get(event, :stream_delta_count) || Map.get(event, "stream_delta_count") do
+      count when is_integer(count) -> count
+      _count -> 1
+    end
+  end
+
+  defp assistant_stream_id(payload) do
+    extract_first_path(payload, [
+      ["params", "item", "id"],
+      [:params, :item, :id],
+      ["params", "msg", "id"],
+      [:params, :msg, :id],
+      ["params", "msg", "item_id"],
+      [:params, :msg, :item_id],
+      ["params", "msg", "itemId"],
+      [:params, :msg, :itemId],
+      ["params", "msg", "payload", "id"],
+      [:params, :msg, :payload, :id],
+      ["params", "msg", "payload", "item_id"],
+      [:params, :msg, :payload, :item_id],
+      ["params", "msg", "payload", "itemId"],
+      [:params, :msg, :payload, :itemId]
+    ])
+  end
+
+  defp assistant_stream_delta_paths do
+    [
+      ["params", "delta"],
+      [:params, :delta],
+      ["params", "content"],
+      [:params, :content],
+      ["params", "text"],
+      [:params, :text],
+      ["params", "msg", "delta"],
+      [:params, :msg, :delta],
+      ["params", "msg", "content"],
+      [:params, :msg, :content],
+      ["params", "msg", "text"],
+      [:params, :msg, :text],
+      ["params", "msg", "payload", "delta"],
+      [:params, :msg, :payload, :delta],
+      ["params", "msg", "payload", "content"],
+      [:params, :msg, :payload, :content],
+      ["params", "msg", "payload", "text"],
+      [:params, :msg, :payload, :text]
+    ]
+  end
+
+  defp truncate_stream_text(stream_text) when is_binary(stream_text) do
+    length = String.length(stream_text)
+
+    if length <= @recent_codex_stream_char_limit do
+      stream_text
+    else
+      start = length - @recent_codex_stream_char_limit
+      "..." <> String.slice(stream_text, start, @recent_codex_stream_char_limit)
+    end
+  end
 
   defp summarize_codex_update(update) do
     %{
@@ -1336,6 +1479,10 @@ defmodule SymphonyElixir.Orchestrator do
   defp payload_method(%{"method" => method}) when is_binary(method), do: method
   defp payload_method(%{method: method}) when is_binary(method), do: method
   defp payload_method(_payload), do: nil
+
+  defp extract_first_path(payload, paths) when is_list(paths) do
+    Enum.find_value(paths, &map_path(payload, &1))
+  end
 
   defp map_path(data, path), do: Enum.reduce_while(path, data, &map_path_step/2)
 

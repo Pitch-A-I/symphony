@@ -224,6 +224,8 @@ defmodule SymphonyElixirWeb.Presenter do
   defp issue_status(_running, _retry), do: "running"
 
   defp running_entry_payload(entry, dashboard?) do
+    recent_events = recent_events_payload(entry)
+
     base_payload = %{
       issue_id: entry.issue_id,
       issue_identifier: entry.identifier,
@@ -233,9 +235,9 @@ defmodule SymphonyElixirWeb.Presenter do
       session_id: entry.session_id,
       turn_count: Map.get(entry, :turn_count, 0),
       last_event: entry.last_codex_event,
-      last_message: summarize_message(entry.last_codex_message),
+      last_message: runtime_last_message(entry, recent_events),
       plan: normalize_runtime_plan(Map.get(entry, :codex_plan)),
-      recent_events: recent_events_payload(entry),
+      recent_events: recent_events,
       started_at: iso8601(entry.started_at),
       last_event_at: iso8601(entry.last_codex_timestamp),
       runtime_seconds: Map.get(entry, :runtime_seconds),
@@ -272,6 +274,8 @@ defmodule SymphonyElixirWeb.Presenter do
   end
 
   defp running_issue_payload(running) do
+    recent_events = recent_events_payload(running)
+
     %{
       worker_host: Map.get(running, :worker_host),
       workspace_path: Map.get(running, :workspace_path),
@@ -280,9 +284,9 @@ defmodule SymphonyElixirWeb.Presenter do
       state: running.state,
       started_at: iso8601(running.started_at),
       last_event: running.last_codex_event,
-      last_message: summarize_message(running.last_codex_message),
+      last_message: runtime_last_message(running, recent_events),
       plan: normalize_runtime_plan(Map.get(running, :codex_plan)),
-      recent_events: recent_events_payload(running),
+      recent_events: recent_events,
       last_event_at: iso8601(running.last_codex_timestamp),
       runtime_seconds: Map.get(running, :runtime_seconds),
       tokens: %{
@@ -291,6 +295,14 @@ defmodule SymphonyElixirWeb.Presenter do
         total_tokens: running.codex_total_tokens
       }
     }
+  end
+
+  defp runtime_last_message(entry, recent_events) when is_list(recent_events) do
+    case recent_events do
+      [%{message: message} | _events] when is_binary(message) -> message
+      [%{"message" => message} | _events] when is_binary(message) -> message
+      _events -> summarize_message(entry.last_codex_message)
+    end
   end
 
   defp retry_issue_payload(retry) do

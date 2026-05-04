@@ -938,10 +938,29 @@ defmodule SymphonyElixir.ExtensionsTest do
       tracker_database_url: "postgresql://postgres:postgres@127.0.0.1:5432/test"
     )
 
+    snapshot =
+      static_snapshot()
+      |> Map.update!(:running, fn [running | rest] ->
+        [
+          Map.put(running, :recent_codex_events, [
+            %{
+              event: :notification,
+              timestamp: DateTime.utc_now(),
+              method: "codex/event/agent_message_delta",
+              message: "assistant draft: grouped canonical blocker update",
+              stream_kind: "assistant_message",
+              stream_text: "grouped canonical blocker update",
+              stream_delta_count: 4
+            }
+          ])
+          | rest
+        ]
+      end)
+
     {:ok, _pid} =
       StaticOrchestrator.start_link(
         name: orchestrator_name,
-        snapshot: static_snapshot(),
+        snapshot: snapshot,
         refresh: %{
           queued: true,
           coalesced: true,
@@ -1040,6 +1059,9 @@ defmodule SymphonyElixir.ExtensionsTest do
     refute detail =~ "detail-chip\">Task"
     assert detail =~ "detail-chip\">P3"
     refute detail =~ "detail-chip\">symphony"
+    assert detail =~ "Recent app-server events"
+    assert detail =~ "assistant draft: grouped canonical blocker update"
+    refute detail =~ "agent message streaming: grouped"
     assert detail =~ "Render agent progress like the Symphony demo."
     assert detail =~ "Inspect the current board"
     assert detail =~ "Render nested checkboxes"

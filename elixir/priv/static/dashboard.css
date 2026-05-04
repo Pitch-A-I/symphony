@@ -1340,7 +1340,7 @@ body.is-kanban-dragging {
 }
 
 .runtime-events {
-  max-height: 13.5rem;
+  max-height: min(26rem, 48vh);
   overflow-y: auto;
   overscroll-behavior: contain;
   padding-right: 0.32rem;
@@ -1354,6 +1354,7 @@ body.is-kanban-dragging {
   color: #3d4450;
   font-size: 0.78rem;
   font-weight: 650;
+  white-space: pre-wrap;
 }
 
 .terminal-page {

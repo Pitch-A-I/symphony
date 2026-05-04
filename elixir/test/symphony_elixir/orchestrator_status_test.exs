@@ -101,6 +101,91 @@ defmodule SymphonyElixir.OrchestratorStatusTest do
            }
   end
 
+  test "orchestrator coalesces assistant stream deltas and keeps deeper recent event scrollback" do
+    issue_id = "issue-stream"
+
+    issue = %Issue{
+      id: issue_id,
+      identifier: "MT-189",
+      title: "Streaming test",
+      description: "Coalesce assistant deltas",
+      state: "In Progress",
+      url: "https://example.org/issues/MT-189"
+    }
+
+    orchestrator_name = Module.concat(__MODULE__, :StreamEventsOrchestrator)
+    {:ok, pid} = Orchestrator.start_link(name: orchestrator_name)
+
+    on_exit(fn ->
+      if Process.alive?(pid) do
+        Process.exit(pid, :normal)
+      end
+    end)
+
+    initial_state = :sys.get_state(pid)
+    started_at = DateTime.utc_now()
+
+    running_entry = %{
+      pid: self(),
+      ref: make_ref(),
+      identifier: issue.identifier,
+      issue: issue,
+      session_id: nil,
+      turn_count: 0,
+      last_codex_message: nil,
+      last_codex_timestamp: nil,
+      last_codex_event: nil,
+      recent_codex_events: [],
+      started_at: started_at
+    }
+
+    :sys.replace_state(pid, fn state ->
+      state
+      |> Map.put(:running, %{issue_id => running_entry})
+      |> Map.put(:claimed, MapSet.put(initial_state.claimed, issue_id))
+    end)
+
+    for delta <- ["Grouped ", "canonical ", "blocker"] do
+      send(
+        pid,
+        {:codex_worker_update, issue_id,
+         %{
+           event: :notification,
+           payload: %{
+             "method" => "codex/event/agent_message_delta",
+             "params" => %{"msg" => %{"payload" => %{"delta" => delta}}}
+           },
+           timestamp: DateTime.utc_now()
+         }}
+      )
+    end
+
+    for event_number <- 1..20 do
+      send(
+        pid,
+        {:codex_worker_update, issue_id,
+         %{
+           event: :notification,
+           payload: %{"method" => "custom/event/#{event_number}"},
+           timestamp: DateTime.utc_now()
+         }}
+      )
+    end
+
+    snapshot = GenServer.call(pid, :snapshot)
+    assert %{running: [snapshot_entry]} = snapshot
+
+    stream_event =
+      Enum.find(snapshot_entry.recent_codex_events, fn event ->
+        Map.get(event, :stream_kind) == "assistant_message"
+      end)
+
+    assert length(snapshot_entry.recent_codex_events) == 21
+    assert stream_event.message == "assistant draft: Grouped canonical blocker"
+    assert stream_event.stream_delta_count == 3
+    refute stream_event.message =~ "agent message streaming"
+  end
+
   test "orchestrator snapshot tracks codex thread totals and app-server pid" do
     issue_id = "issue-usage-snapshot"
 
