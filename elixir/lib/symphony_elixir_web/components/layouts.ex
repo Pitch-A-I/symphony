@@ -159,6 +159,7 @@ defmodule SymphonyElixirWeb.Layouts do
                 this.handlePointerDown = this.handlePointerDown.bind(this);
                 this.handlePointerMove = this.handlePointerMove.bind(this);
                 this.handlePointerUp = this.handlePointerUp.bind(this);
+                this.handleSelectStart = this.handleSelectStart.bind(this);
                 this.handleClick = this.handleClick.bind(this);
                 this.handleFocusTaskCard = this.handleFocusTaskCard.bind(this);
                 this.handleFocusTaskCardBrowserEvent = this.handleFocusTaskCardBrowserEvent.bind(this);
@@ -191,6 +192,10 @@ defmodule SymphonyElixirWeb.Layouts do
                 var taskId = card.getAttribute("data-task-id");
                 if (!taskId) return;
 
+                event.preventDefault();
+                this.clearTextSelection();
+                this.enableSelectionGuard();
+
                 this.pendingDrag = {
                   card: card,
                   taskId: taskId,
@@ -201,6 +206,12 @@ defmodule SymphonyElixirWeb.Layouts do
                 document.addEventListener("pointermove", this.handlePointerMove, true);
                 document.addEventListener("pointerup", this.handlePointerUp, true);
                 document.addEventListener("pointercancel", this.handlePointerUp, true);
+              },
+
+              handleSelectStart: function (event) {
+                if (!this.pendingDrag && !this.drag) return;
+
+                event.preventDefault();
               },
 
               handleClick: function (event) {
@@ -270,20 +281,23 @@ defmodule SymphonyElixirWeb.Layouts do
                 dragCard.style.left = rect.left + "px";
                 dragCard.style.top = rect.top + "px";
                 document.body.appendChild(dragCard);
+                document.body.classList.remove("is-kanban-drag-pending");
                 document.body.classList.add("is-kanban-dragging");
 
+                this.clearTextSelection();
                 this.moveCard(event);
                 this.updateDropTarget(event);
               },
 
               handlePointerMove: function (event) {
                 if (!this.drag && this.pendingDrag) {
+                  event.preventDefault();
+
                   var deltaX = event.clientX - this.pendingDrag.startX;
                   var deltaY = event.clientY - this.pendingDrag.startY;
 
                   if (Math.sqrt(deltaX * deltaX + deltaY * deltaY) < 6) return;
 
-                  event.preventDefault();
                   this.startDrag(event);
                 }
 
@@ -440,7 +454,7 @@ defmodule SymphonyElixirWeb.Layouts do
                 document.removeEventListener("pointermove", this.handlePointerMove, true);
                 document.removeEventListener("pointerup", this.handlePointerUp, true);
                 document.removeEventListener("pointercancel", this.handlePointerUp, true);
-                document.body.classList.remove("is-kanban-dragging");
+                this.disableSelectionGuard();
 
                 this.el.querySelectorAll(".is-drop-active").forEach(function (node) {
                   node.classList.remove("is-drop-active");
@@ -467,6 +481,27 @@ defmodule SymphonyElixirWeb.Layouts do
                 document.removeEventListener("pointerup", this.handlePointerUp, true);
                 document.removeEventListener("pointercancel", this.handlePointerUp, true);
                 this.pendingDrag = null;
+                this.disableSelectionGuard();
+              },
+
+              enableSelectionGuard: function () {
+                document.body.classList.add("is-kanban-drag-pending");
+                document.addEventListener("selectstart", this.handleSelectStart, true);
+              },
+
+              disableSelectionGuard: function () {
+                document.body.classList.remove("is-kanban-drag-pending");
+                document.body.classList.remove("is-kanban-dragging");
+                document.removeEventListener("selectstart", this.handleSelectStart, true);
+                this.clearTextSelection();
+              },
+
+              clearTextSelection: function () {
+                var selection = window.getSelection && window.getSelection();
+
+                if (selection && selection.removeAllRanges) {
+                  selection.removeAllRanges();
+                }
               },
 
               makePlaceholder: function (rect, className) {

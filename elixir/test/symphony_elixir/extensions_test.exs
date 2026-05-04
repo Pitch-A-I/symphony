@@ -1019,6 +1019,9 @@ defmodule SymphonyElixir.ExtensionsTest do
     html = html_response(get(build_conn(), "/"), 200)
     assert html =~ "/dashboard.css"
     assert html =~ "Hooks.ModalScrollLock"
+    assert html =~ "handleSelectStart"
+    assert html =~ "is-kanban-drag-pending"
+    assert html =~ "clearTextSelection"
     assert html =~ "/vendor/phoenix_html/phoenix_html.js"
     assert html =~ "/vendor/phoenix/phoenix.js"
     assert html =~ "/vendor/phoenix_live_view/phoenix_live_view.js"
@@ -1043,6 +1046,8 @@ defmodule SymphonyElixir.ExtensionsTest do
     assert dashboard_css =~ ".blocked-reason-panel"
     assert dashboard_css =~ ".state-spinner"
     assert dashboard_css =~ ".drag-placeholder"
+    assert dashboard_css =~ "body.is-kanban-drag-pending"
+    assert dashboard_css =~ "-webkit-user-select: none !important"
     assert dashboard_css =~ ".is-drag-origin-card"
     assert dashboard_css =~ ".detail-modal"
     assert dashboard_css =~ "width: min(88rem, calc(100vw - 1.8rem))"

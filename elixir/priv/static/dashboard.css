@@ -558,9 +558,13 @@ button {
   transform: rotate(1.5deg) scale(1.015);
 }
 
-body.is-kanban-dragging {
+body.is-kanban-drag-pending,
+body.is-kanban-drag-pending *,
+body.is-kanban-dragging,
+body.is-kanban-dragging * {
   cursor: grabbing;
-  user-select: none;
+  -webkit-user-select: none !important;
+  user-select: none !important;
 }
 
 .drag-placeholder {
