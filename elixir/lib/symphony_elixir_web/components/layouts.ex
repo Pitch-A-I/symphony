@@ -284,6 +284,7 @@ defmodule SymphonyElixirWeb.Layouts do
                 document.body.classList.remove("is-kanban-drag-pending");
                 document.body.classList.add("is-kanban-dragging");
 
+                this.activateIntakeDoneShortcut(this.drag.originState);
                 this.clearTextSelection();
                 this.moveCard(event);
                 this.updateDropTarget(event);
@@ -470,6 +471,7 @@ defmodule SymphonyElixirWeb.Layouts do
                   drag.card.parentNode.removeChild(drag.card);
                 }
 
+                this.restoreIntakeDoneShortcut();
                 this.drag = null;
                 this.teardownPendingDrag();
               },
@@ -532,6 +534,8 @@ defmodule SymphonyElixirWeb.Layouts do
                 var selector = '.ticket-card[data-task-id="' + drag.taskId + '"]:not(.is-drag-layer)';
                 var sourceCard = this.el.querySelector(selector);
 
+                this.ensureIntakeDoneShortcut();
+
                 if (sourceCard) {
                   drag.sourceCard = sourceCard;
                   this.markOriginCard(sourceCard, drag.originRect);
@@ -540,6 +544,170 @@ defmodule SymphonyElixirWeb.Layouts do
                 if (drag.lastClientX != null && drag.lastClientY != null) {
                   this.updateDropTarget({clientX: drag.lastClientX, clientY: drag.lastClientY});
                 }
+              },
+
+              activateIntakeDoneShortcut: function (originState) {
+                if (!this.sameBoardState(originState, "suggested") || this.columnShortcut) return;
+
+                var parent = this.boardColumnsContainer();
+                if (!parent) return;
+
+                var doneColumn = this.findColumnByState(parent, "Done");
+                var inProgressColumn = this.findColumnByState(parent, "In Progress");
+                if (!doneColumn || !inProgressColumn || doneColumn === inProgressColumn) return;
+
+                this.columnShortcut = {
+                  originalStates: this.columnStates(parent)
+                };
+
+                this.el.classList.add("is-suggested-done-shortcut");
+                this.ensureIntakeDoneShortcut(true);
+              },
+
+              ensureIntakeDoneShortcut: function (animate) {
+                if (!this.columnShortcut) return;
+
+                var parent = this.boardColumnsContainer();
+                if (!parent) return;
+
+                var doneColumn = this.findColumnByState(parent, "Done");
+                var inProgressColumn = this.findColumnByState(parent, "In Progress");
+                if (!doneColumn || !inProgressColumn || doneColumn === inProgressColumn) return;
+
+                doneColumn.classList.add("is-done-shortcut");
+                inProgressColumn.classList.add("is-shortcut-swapped-out");
+
+                var originalDoneIndex = this.columnShortcut.originalStates.indexOf("done");
+                var originalInProgressIndex = this.columnShortcut.originalStates.indexOf("in progress");
+                var currentDoneIndex = this.columnIndex(parent, doneColumn);
+                var currentInProgressIndex = this.columnIndex(parent, inProgressColumn);
+
+                if (originalDoneIndex < 0 || originalInProgressIndex < 0) return;
+
+                var shouldSwap =
+                  originalInProgressIndex < originalDoneIndex
+                    ? currentInProgressIndex < currentDoneIndex
+                    : currentDoneIndex < currentInProgressIndex;
+
+                if (!shouldSwap) return;
+
+                this.withColumnAnimation(parent, Boolean(animate), function () {
+                  this.swapColumns(parent, doneColumn, inProgressColumn);
+                }.bind(this));
+              },
+
+              restoreIntakeDoneShortcut: function () {
+                if (!this.columnShortcut) return;
+
+                var shortcut = this.columnShortcut;
+                var parent = this.boardColumnsContainer();
+                this.columnShortcut = null;
+                this.el.classList.remove("is-suggested-done-shortcut");
+
+                if (!parent) return;
+
+                this.withColumnAnimation(parent, true, function () {
+                  this.restoreColumnStateOrder(parent, shortcut.originalStates);
+                }.bind(this));
+
+                parent.querySelectorAll(".is-done-shortcut, .is-shortcut-swapped-out").forEach(function (column) {
+                  column.classList.remove("is-done-shortcut", "is-shortcut-swapped-out");
+                });
+              },
+
+              boardColumnsContainer: function () {
+                return this.el.querySelector(".board-columns");
+              },
+
+              columnStates: function (parent) {
+                return Array.prototype.slice.call(parent.children).map(function (column) {
+                  return this.normalizeBoardState(column.getAttribute("data-drop-state"));
+                }.bind(this));
+              },
+
+              findColumnByState: function (parent, stateName) {
+                var target = this.normalizeBoardState(stateName);
+
+                return Array.prototype.slice.call(parent.children).find(function (column) {
+                  return this.normalizeBoardState(column.getAttribute("data-drop-state")) === target;
+                }.bind(this));
+              },
+
+              columnIndex: function (parent, column) {
+                return Array.prototype.indexOf.call(parent.children, column);
+              },
+
+              normalizeBoardState: function (stateName) {
+                return String(stateName || "").trim().replace(/\s+/g, " ").toLowerCase();
+              },
+
+              sameBoardState: function (left, right) {
+                return this.normalizeBoardState(left) === this.normalizeBoardState(right);
+              },
+
+              swapColumns: function (parent, firstColumn, secondColumn) {
+                var marker = document.createTextNode("");
+
+                parent.insertBefore(marker, firstColumn);
+                parent.insertBefore(firstColumn, secondColumn);
+                parent.insertBefore(secondColumn, marker);
+                parent.removeChild(marker);
+              },
+
+              restoreColumnStateOrder: function (parent, originalStates) {
+                var columnsByState = {};
+
+                Array.prototype.slice.call(parent.children).forEach(function (column) {
+                  var state = this.normalizeBoardState(column.getAttribute("data-drop-state"));
+                  if (state && !columnsByState[state]) columnsByState[state] = column;
+                }.bind(this));
+
+                originalStates.forEach(function (state) {
+                  var column = columnsByState[state];
+                  if (column) parent.appendChild(column);
+                });
+              },
+
+              withColumnAnimation: function (parent, animate, mutator) {
+                if (!animate) {
+                  mutator();
+                  return;
+                }
+
+                var columns = Array.prototype.slice.call(parent.children);
+                var firstRects = new Map();
+
+                columns.forEach(function (column) {
+                  firstRects.set(column, column.getBoundingClientRect());
+                });
+
+                mutator();
+
+                var nextColumns = Array.prototype.slice.call(parent.children);
+
+                nextColumns.forEach(function (column) {
+                  var first = firstRects.get(column);
+                  if (!first) return;
+
+                  var last = column.getBoundingClientRect();
+                  var deltaX = first.left - last.left;
+                  var deltaY = first.top - last.top;
+
+                  if (Math.abs(deltaX) < 1 && Math.abs(deltaY) < 1) return;
+
+                  if (column.animate) {
+                    column.animate(
+                      [
+                        {transform: "translate(" + deltaX + "px, " + deltaY + "px)"},
+                        {transform: "translate(0, 0)"}
+                      ],
+                      {
+                        duration: 220,
+                        easing: "cubic-bezier(0.2, 0, 0, 1)"
+                      }
+                    );
+                  }
+                });
               }
             };
 

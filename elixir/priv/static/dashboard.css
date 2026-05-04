@@ -275,6 +275,21 @@ button {
   min-width: 0;
   border-right: 1px solid #ededf0;
   padding-right: 0.42rem;
+  transition:
+    background-color 160ms ease,
+    border-color 160ms ease,
+    box-shadow 160ms ease,
+    opacity 160ms ease;
+}
+
+.board-workspace.is-suggested-done-shortcut .kanban-column.is-done-shortcut {
+  border-right-color: rgba(22, 163, 74, 0.34);
+  background: linear-gradient(180deg, rgba(22, 163, 74, 0.1), rgba(22, 163, 74, 0.02));
+  box-shadow: inset 0 0 0 1px rgba(22, 163, 74, 0.16);
+}
+
+.board-workspace.is-suggested-done-shortcut .kanban-column.is-shortcut-swapped-out {
+  opacity: 0.92;
 }
 
 .column-header {
