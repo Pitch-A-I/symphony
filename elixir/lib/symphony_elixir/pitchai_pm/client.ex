@@ -2288,7 +2288,7 @@ defmodule SymphonyElixir.PitchAIPM.Client do
       priority: data["priority"],
       state: data["state"],
       branch_name: clean_string(data["branch_name"]),
-      url: clean_string(data["url"]),
+      url: issue_url(data["id"], data["url"]),
       assignee_id: clean_string(data["assignee_id"]),
       blocked_by: decode_blockers(data["blocked_by_json"]),
       labels: labels(data["labels"]),
@@ -2348,6 +2348,19 @@ defmodule SymphonyElixir.PitchAIPM.Client do
       description: clean_string(data["description"]),
       metadata: decode_json_object(data["metadata"])
     }
+  end
+
+  defp issue_url(task_id, tracking_url) do
+    clean_string(tracking_url) || task_modal_url(task_id)
+  end
+
+  defp task_modal_url(task_id) do
+    with task_id when is_binary(task_id) <- clean_string(task_id),
+         board_url when is_binary(board_url) <- Config.public_board_url() do
+      "#{String.trim_trailing(board_url, "/")}/?task_id=#{URI.encode_www_form(task_id)}"
+    else
+      _missing -> nil
+    end
   end
 
   defp board_task_row_to_map(columns, row) do

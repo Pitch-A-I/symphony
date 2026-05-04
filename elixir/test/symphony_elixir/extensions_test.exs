@@ -1146,6 +1146,31 @@ defmodule SymphonyElixir.ExtensionsTest do
     refute_receive :snapshot_requested, 50
   end
 
+  test "kanban task query parameter opens the task detail modal" do
+    orchestrator_name = Module.concat(__MODULE__, :BoardDeepLinkOrchestrator)
+    Application.put_env(:symphony_elixir, :pitchai_pm_client_module, FakePitchAIPMClient)
+
+    write_workflow_file!(Workflow.workflow_file_path(),
+      tracker_kind: "pitchai_pm",
+      tracker_project_id: "project-pm",
+      tracker_database_url: "postgresql://postgres:postgres@127.0.0.1:5432/test"
+    )
+
+    {:ok, _pid} =
+      StaticOrchestrator.start_link(
+        name: orchestrator_name,
+        snapshot: static_snapshot(),
+        recipient: self()
+      )
+
+    start_test_endpoint(orchestrator: orchestrator_name, snapshot_timeout_ms: 50)
+    {:ok, _view, html} = live(build_conn(), "/?task_id=issue-http")
+
+    assert html =~ "task-detail-backdrop"
+    assert html =~ "Dispatch active PM task"
+    assert html =~ "Agent progress"
+  end
+
   test "kanban board applies persisted collapsed project groups" do
     orchestrator_name = Module.concat(__MODULE__, :CollapsedBoardOrchestrator)
     Application.put_env(:symphony_elixir, :pitchai_pm_client_module, FakePitchAIPMClient)

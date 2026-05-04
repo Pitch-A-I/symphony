@@ -91,6 +91,13 @@ defmodule SymphonyElixir.Config do
     end
   end
 
+  @spec public_board_url() :: String.t() | nil
+  def public_board_url do
+    clean_string(System.get_env("PITCHAI_SYMPHONY_PUBLIC_URL")) ||
+      clean_string(System.get_env("SYMPHONY_PUBLIC_URL")) ||
+      clean_string(settings!().server.public_url)
+  end
+
   @spec validate!() :: :ok | {:error, term()}
   def validate! do
     with {:ok, settings} <- settings() do
@@ -172,4 +179,13 @@ defmodule SymphonyElixir.Config do
         "Invalid WORKFLOW.md config: #{inspect(other)}"
     end
   end
+
+  defp clean_string(value) when is_binary(value) do
+    case String.trim(value) do
+      "" -> nil
+      trimmed -> trimmed
+    end
+  end
+
+  defp clean_string(_value), do: nil
 end

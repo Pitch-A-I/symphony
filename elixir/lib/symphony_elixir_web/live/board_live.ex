@@ -35,6 +35,26 @@ defmodule SymphonyElixirWeb.BoardLive do
   end
 
   @impl true
+  def handle_params(params, _uri, socket) do
+    case optional_param(params, "task_id") do
+      nil ->
+        {:noreply, assign(socket, :selected_task, nil)}
+
+      task_id ->
+        case Presenter.board_task_detail(task_id, current_runtime(socket)) do
+          {:ok, detail} ->
+            {:noreply, assign(socket, :selected_task, detail)}
+
+          {:error, reason} ->
+            {:noreply,
+             socket
+             |> assign(:selected_task, nil)
+             |> put_flash(:error, "Task unavailable: #{inspect(reason, pretty: false)}")}
+        end
+    end
+  end
+
+  @impl true
   def handle_event("refresh", _params, socket) do
     _result = Presenter.refresh_payload(orchestrator())
     {:noreply, reload_board(socket)}
@@ -44,7 +64,10 @@ defmodule SymphonyElixirWeb.BoardLive do
   def handle_event("open_task", %{"task_id" => task_id}, socket) do
     case Presenter.board_task_detail(task_id, current_runtime(socket)) do
       {:ok, detail} ->
-        {:noreply, assign(socket, :selected_task, detail)}
+        {:noreply,
+         socket
+         |> assign(:selected_task, detail)
+         |> push_patch(to: task_detail_path(task_id))}
 
       {:error, reason} ->
         {:noreply, put_flash(socket, :error, "Task unavailable: #{inspect(reason, pretty: false)}")}
@@ -53,7 +76,10 @@ defmodule SymphonyElixirWeb.BoardLive do
 
   @impl true
   def handle_event("close_task", _params, socket) do
-    {:noreply, assign(socket, :selected_task, nil)}
+    {:noreply,
+     socket
+     |> assign(:selected_task, nil)
+     |> push_patch(to: "/")}
   end
 
   @impl true
@@ -726,6 +752,8 @@ defmodule SymphonyElixirWeb.BoardLive do
   defp snapshot_timeout_ms do
     Endpoint.config(:snapshot_timeout_ms) || 15_000
   end
+
+  defp task_detail_path(task_id), do: "/?task_id=#{URI.encode_www_form(task_id)}"
 
   defp state_label("Symphony " <> rest), do: rest
   defp state_label(state_name), do: state_name

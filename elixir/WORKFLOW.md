@@ -42,6 +42,7 @@ codex:
 server:
   host: 127.0.0.1
   port: 4021
+  public_url: https://dispatch.pitchai.net:24021
 ---
 
 You are working on a PitchAI project-management task.
@@ -52,7 +53,7 @@ Identifier: {{ issue.identifier }}
 Title: {{ issue.title }}
 Current status: {{ issue.state }}
 Labels: {{ issue.labels }}
-URL: {{ issue.url }}
+Symphony task URL: {{ issue.url }}
 
 Description:
 {% if issue.description %}
@@ -142,6 +143,18 @@ When the task state is `Merging`, open and follow `.codex/skills/land/SKILL.md`.
 
 Then append a changelog entry summarizing the merge.
 
+## Human Review and PR Handoff
+
+Before moving a task to `Human Review`, make the review path usable by a remote human:
+
+1. Open the pull request only after implementation and validation are complete.
+2. Include the Symphony task link in the PR body exactly as `Symphony task: {{ issue.url }}`.
+3. For user-facing app/UI changes, run `uv run dev` from the workspace repo root and use the external public URL it provides for review. A localhost or private server URL is not acceptable because the reviewer is not on this machine.
+4. Include the public preview URL in the PR body exactly as `Preview: <public-url>`.
+5. Record the same preview URL and validation evidence in the workpad `### Validation` section.
+6. Attach the PR with `pitchai_pm.attach_pr`.
+7. Move to `Human Review` only after the PR body contains the Symphony task link, the public preview URL when applicable, and the validation evidence.
+
 ## Completion Bar
 
 Before moving to `Human Review` or `Done`, verify:
@@ -149,6 +162,8 @@ Before moving to `Human Review` or `Done`, verify:
 - Workpad plan is current.
 - Acceptance criteria are checked or explicitly blocked.
 - Validation evidence is recorded.
+- PR body includes `Symphony task: {{ issue.url }}`.
+- PR body includes the external `uv run dev` preview URL for user-facing app/UI changes.
 - PR link is attached when a PR exists.
 - Changelog entry is appended for user-visible or repo changes.
 

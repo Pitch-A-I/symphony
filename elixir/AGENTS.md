@@ -49,6 +49,8 @@ mix specs.check
 ## PR Requirements
 
 - PR body must follow `../.github/pull_request_template.md` exactly.
+- Include `Symphony task: https://dispatch.pitchai.net:24021/?task_id=...` in the Review Links section when a PM task exists.
+- For user-facing app/UI changes, run `uv run dev` from the workspace repo root and include the external public preview URL in the Review Links section. Do not use localhost/private URLs for human review.
 - Validate PR body locally when needed:
 
 ```bash
