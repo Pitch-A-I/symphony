@@ -1094,6 +1094,7 @@ body.is-kanban-dragging {
 
 .blocker-ref-chip,
 .detail-todo-action,
+.detail-merge-action,
 .detail-cancel-action {
   display: inline-flex;
   align-items: center;
@@ -1148,6 +1149,19 @@ body.is-kanban-dragging {
 
 .detail-todo-action:hover {
   background: #333740;
+}
+
+.detail-merge-action {
+  flex: 0 0 auto;
+  padding: 0.22rem 0.58rem;
+  border-color: rgba(45, 157, 120, 0.34);
+  background: #eef8f3;
+  color: #147452;
+}
+
+.detail-merge-action:hover {
+  border-color: rgba(45, 157, 120, 0.54);
+  background: #e1f3eb;
 }
 
 .detail-cancel-action {

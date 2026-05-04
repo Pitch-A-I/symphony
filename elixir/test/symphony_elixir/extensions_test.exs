@@ -1039,6 +1039,7 @@ defmodule SymphonyElixir.ExtensionsTest do
     assert dashboard_css =~ ".issue-group-count"
     assert dashboard_css =~ ".column-sort-menu"
     assert dashboard_css =~ ".column-sort-option"
+    assert dashboard_css =~ ".detail-merge-action"
     assert dashboard_css =~ ".blocked-reason-panel"
     assert dashboard_css =~ ".state-spinner"
     assert dashboard_css =~ ".drag-placeholder"
@@ -1238,6 +1239,7 @@ defmodule SymphonyElixir.ExtensionsTest do
     refute detail =~ "detail-chip\">symphony"
     assert detail =~ "Recent app-server events"
     assert detail =~ "Stop"
+    refute detail =~ "Move to Merging"
     assert detail =~ "assistant draft: grouped canonical blocker update"
     assert detail =~ "Final assistant message"
     assert detail =~ "Finished the modal event cleanup and verified it in LiveView."
@@ -1255,6 +1257,8 @@ defmodule SymphonyElixir.ExtensionsTest do
     assert completed_detail =~ "No stored app-server final message was captured for this run."
     assert completed_detail =~ "Verified completed work is visible in the modal."
     assert completed_detail =~ "LiveView detail modal test covers the workpad-derived summary"
+    assert completed_detail =~ "Move to Todo"
+    assert completed_detail =~ "Move to Merging"
 
     blocked_detail = render_click(view, "open_task", %{"task_id" => "issue-blocked"})
     assert blocked_detail =~ "blocked-reason-panel"
@@ -1267,6 +1271,14 @@ defmodule SymphonyElixir.ExtensionsTest do
     assert blocked_detail =~ "Cancel"
 
     Application.put_env(:symphony_elixir, :pitchai_pm_test_recipient, self())
+
+    render_click(view, "open_task", %{"task_id" => "issue-human-review"})
+    merging_html = render_click(view, "move_task_to_merging", %{"task_id" => "issue-human-review"})
+
+    assert_receive {:pitchai_pm_move_issue_on_board, "issue-human-review", "Merging", %{reason: "modal_move_to_merging"}}
+
+    refute merging_html =~ "task-detail-backdrop"
+
     render_hook(view, "move_task", %{"task_id" => "issue-todo", "target_state" => "Human Review"})
 
     assert_receive {:pitchai_pm_move_issue_on_board, "issue-todo", "Human Review", %{after_task_id: nil, before_task_id: nil, reason: "kanban_drag_drop"}}

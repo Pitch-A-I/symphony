@@ -247,6 +247,30 @@ defmodule SymphonyElixirWeb.BoardLive do
   end
 
   @impl true
+  def handle_event("move_task_to_merging", %{"task_id" => task_id}, socket) do
+    target_state = "Merging"
+
+    if valid_board_state?(socket.assigns.payload, target_state) do
+      case Presenter.move_board_task(task_id, target_state, %{reason: "modal_move_to_merging"}) do
+        :ok ->
+          {:noreply,
+           socket
+           |> reload_board()
+           |> assign(:selected_task, nil)
+           |> push_patch(to: "/")}
+
+        {:error, reason} ->
+          {:noreply,
+           socket
+           |> put_flash(:error, "Move to Merging failed: #{inspect(reason, pretty: false)}")
+           |> reload_board()}
+      end
+    else
+      {:noreply, put_flash(socket, :error, "Move to Merging failed: Merging column unavailable")}
+    end
+  end
+
+  @impl true
   def handle_event("focus_task_card", %{"task_id" => task_id}, socket) do
     {:noreply,
      socket
@@ -590,7 +614,7 @@ defmodule SymphonyElixirWeb.BoardLive do
 
           <% detail_chips = detail_chips(@task) %>
           <% blocker_refs = task_blocker_refs(@task) %>
-          <div :if={detail_chips != [] or blocker_refs != [] or show_move_to_todo?(@task) or show_cancel_task?(@task)} class="detail-quick-row">
+          <div :if={detail_chips != [] or blocker_refs != [] or show_move_to_todo?(@task) or show_move_to_merging?(@task) or show_cancel_task?(@task)} class="detail-quick-row">
             <div class="detail-inline-meta">
               <span :for={chip <- detail_chips} class="detail-chip"><%= chip %></span>
               <span :if={blocker_refs != []} class="detail-inline-label">Blocked by</span>
@@ -616,6 +640,15 @@ defmodule SymphonyElixirWeb.BoardLive do
                 phx-value-task_id={@task.id}
               >
                 Move to Todo
+              </button>
+              <button
+                :if={show_move_to_merging?(@task)}
+                type="button"
+                class="detail-merge-action"
+                phx-click="move_task_to_merging"
+                phx-value-task_id={@task.id}
+              >
+                Move to Merging
               </button>
               <button
                 :if={show_cancel_task?(@task)}
@@ -1342,6 +1375,12 @@ defmodule SymphonyElixirWeb.BoardLive do
   end
 
   defp show_move_to_todo?(_task), do: false
+
+  defp show_move_to_merging?(task) when is_map(task) do
+    normalize_state(Map.get(task, :state)) == "human review"
+  end
+
+  defp show_move_to_merging?(_task), do: false
 
   defp show_cancel_task?(task) when is_map(task) do
     normalize_state(Map.get(task, :state)) not in terminal_task_states()
