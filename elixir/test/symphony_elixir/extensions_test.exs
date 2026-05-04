@@ -219,9 +219,54 @@ defmodule SymphonyElixir.ExtensionsTest do
            %{
              state_name: "Done",
              color: "#6366f1",
-             task_count: 12,
+             task_count: 2,
              hidden?: false,
-             tasks: []
+             tasks: [
+               %{
+                 id: "issue-done-old",
+                 identifier: "MT-DONE-OLD",
+                 title: "Older completed ticket",
+                 state: "Done",
+                 value_name: "Task",
+                 project_id: "project-pm",
+                 project_name: "TODO App",
+                 assignee: "symphony",
+                 priority: 4,
+                 rank: 2048.0,
+                 labels: [],
+                 branch_name: nil,
+                 url: "",
+                 updated_at: "2026-05-04T16:00:00Z",
+                 created_at: "2026-05-01T12:00:00Z",
+                 completed_at: "2026-05-03T10:00:00Z",
+                 comment_count: 0,
+                 downstream_count: 0,
+                 pr_count: 0,
+                 workpad_updated_at: nil
+               },
+               %{
+                 id: "issue-done-new",
+                 identifier: "MT-DONE-NEW",
+                 title: "Newest completed ticket",
+                 state: "Done",
+                 value_name: "Task",
+                 project_id: "project-pm",
+                 project_name: "TODO App",
+                 assignee: "symphony",
+                 priority: 5,
+                 rank: 1024.0,
+                 labels: [],
+                 branch_name: nil,
+                 url: "",
+                 updated_at: "2026-05-02T12:00:00Z",
+                 created_at: "2026-05-01T12:00:00Z",
+                 completed_at: "2026-05-04T10:00:00Z",
+                 comment_count: 0,
+                 downstream_count: 0,
+                 pr_count: 0,
+                 workpad_updated_at: nil
+               }
+             ]
            },
            %{
              state_name: "Cancelled",
@@ -992,6 +1037,8 @@ defmodule SymphonyElixir.ExtensionsTest do
     assert dashboard_css =~ ".dependency-badge"
     assert dashboard_css =~ ".group-chevron"
     assert dashboard_css =~ ".issue-group-count"
+    assert dashboard_css =~ ".column-sort-menu"
+    assert dashboard_css =~ ".column-sort-option"
     assert dashboard_css =~ ".blocked-reason-panel"
     assert dashboard_css =~ ".state-spinner"
     assert dashboard_css =~ ".drag-placeholder"
@@ -1113,7 +1160,26 @@ defmodule SymphonyElixir.ExtensionsTest do
     refute html =~ ">Active<"
     refute html =~ "runtime-badge running"
     assert html =~ "MT-890"
+    assert html =~ "Newest completed ticket"
+    assert html =~ "Older completed ticket"
+    assert html_index(html, "Newest completed ticket") < html_index(html, "Older completed ticket")
     refute html =~ "SYMPHONY STATUS"
+
+    done_sort_html = render_click(view, "toggle_column_sort_menu", %{"state_name" => "Done"})
+    assert done_sort_html =~ "Latest done"
+    assert done_sort_html =~ "Completion time"
+    assert done_sort_html =~ "Recently updated"
+    assert html_index(done_sort_html, "Newest completed ticket") < html_index(done_sort_html, "Older completed ticket")
+
+    updated_sort_html =
+      render_click(view, "set_column_sort", %{"state_name" => "Done", "sort_key" => "updated_desc"})
+
+    assert html_index(updated_sort_html, "Older completed ticket") < html_index(updated_sort_html, "Newest completed ticket")
+
+    progress_sort_html = render_click(view, "toggle_column_sort_menu", %{"state_name" => "In Progress"})
+    assert progress_sort_html =~ "Board order"
+    assert progress_sort_html =~ "Priority"
+    assert progress_sort_html =~ "Title"
 
     Application.put_env(:symphony_elixir, :pitchai_pm_test_recipient, self())
 
@@ -1518,6 +1584,13 @@ defmodule SymphonyElixir.ExtensionsTest do
       :snapshot_requested -> flush_snapshot_requests()
     after
       0 -> :ok
+    end
+  end
+
+  defp html_index(html, needle) do
+    case :binary.match(html, needle) do
+      {index, _length} -> index
+      :nomatch -> flunk("Expected #{inspect(needle)} in rendered HTML")
     end
   end
 

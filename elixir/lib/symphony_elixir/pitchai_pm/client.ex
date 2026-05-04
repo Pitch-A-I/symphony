@@ -1705,6 +1705,7 @@ defmodule SymphonyElixir.PitchAIPM.Client do
       rank,
       created_at,
       updated_at,
+      completed_at,
       comment_count,
       blocked_reason,
       pr_count,
@@ -1727,6 +1728,7 @@ defmodule SymphonyElixir.PitchAIPM.Client do
         t.rank as rank,
         t.created_at,
         t.updated_at,
+        done_event.completed_at,
         coalesce((select count(*)::integer from pitchai_symphony.task_comments c where c.task_id = t.id), 0) as comment_count,
         (
           select c.body
@@ -1763,11 +1765,23 @@ defmodule SymphonyElixir.PitchAIPM.Client do
         ) as downstream_count,
         row_number() over (
           partition by lower(trim(coalesce(t.state_name, '')))
-          order by t.rank asc nulls last, coalesce(tr.priority, 5), t.updated_at desc nulls last, t.created_at desc nulls last, t.name
+          order by
+            case when lower(trim(coalesce(t.state_name, ''))) = 'done' then done_event.completed_at end desc nulls last,
+            case when lower(trim(coalesce(t.state_name, ''))) <> 'done' then t.rank end asc nulls last,
+            coalesce(tr.priority, 5),
+            t.updated_at desc nulls last,
+            t.created_at desc nulls last,
+            t.name
         ) as board_rank
       from public.tasks t
       left join public.projects p on p.id = t.project_id
       left join pitchai_symphony.task_tracking tr on tr.task_id = t.id
+      left join lateral (
+        select max(e.created_at) as completed_at
+        from pitchai_symphony.task_state_events e
+        where e.task_id = t.id
+          and lower(trim(coalesce(e.to_state, ''))) = 'done'
+      ) done_event on true
       where #{board_visible_task_condition_sql()}
         and nullif(trim(coalesce(t.state_name, '')), '') is not null
     ) ranked
@@ -2345,6 +2359,7 @@ defmodule SymphonyElixir.PitchAIPM.Client do
       url: clean_string(data["url"]),
       created_at: encode_datetime(data["created_at"]),
       updated_at: encode_datetime(data["updated_at"]),
+      completed_at: encode_datetime(data["completed_at"]),
       comment_count: data["comment_count"] || 0,
       blocked_reason: clean_string(data["blocked_reason"]),
       pr_count: data["pr_count"] || 0,

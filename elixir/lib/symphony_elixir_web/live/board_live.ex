@@ -21,6 +21,8 @@ defmodule SymphonyElixirWeb.BoardLive do
       |> assign(:create_task_form, nil)
       |> assign(:group_by, "project")
       |> assign(:show_hidden_columns, false)
+      |> assign(:open_column_sort_menu, nil)
+      |> assign(:column_sorts, %{})
       |> assign(:board_reload_generation, 0)
       |> assign(:board_reload_task, nil)
       |> assign(:forecast_state, BoardForecast.new_state())
@@ -150,6 +152,32 @@ defmodule SymphonyElixirWeb.BoardLive do
   @impl true
   def handle_event("toggle_hidden_columns", _params, socket) do
     {:noreply, update(socket, :show_hidden_columns, &(!&1))}
+  end
+
+  @impl true
+  def handle_event("toggle_column_sort_menu", %{"state_name" => state_name}, socket) do
+    open_state = Map.get(socket.assigns, :open_column_sort_menu)
+
+    next_open_state =
+      if normalize_state(open_state) == normalize_state(state_name) do
+        nil
+      else
+        state_name
+      end
+
+    {:noreply, assign(socket, :open_column_sort_menu, next_open_state)}
+  end
+
+  @impl true
+  def handle_event("set_column_sort", %{"state_name" => state_name, "sort_key" => sort_key}, socket) do
+    if column_sort_key_allowed?(state_name, sort_key) do
+      {:noreply,
+       socket
+       |> assign(:column_sorts, put_column_sort(socket.assigns.column_sorts, state_name, sort_key))
+       |> assign(:open_column_sort_menu, nil)}
+    else
+      {:noreply, put_flash(socket, :error, "Sort failed: unsupported option")}
+    end
   end
 
   @impl true
@@ -323,13 +351,43 @@ defmodule SymphonyElixirWeb.BoardLive do
               role="listitem"
               data-drop-state={column.state_name}
             >
+              <% column_tasks = sorted_column_tasks(column, @column_sorts) %>
               <header class="column-header">
                 <div class="column-title">
                   <span class="state-ring" style={"--state-color: #{column.color || "#9ca3af"}"}></span>
                   <span><%= state_label(column.state_name) %></span>
                   <span class="column-count"><%= column.task_count %></span>
                 </div>
-                <div class="column-menu" aria-hidden="true">...</div>
+                <div class="column-menu">
+                  <button
+                    type="button"
+                    class={["column-menu-button", sort_menu_open?(@open_column_sort_menu, column.state_name) && "is-active"]}
+                    phx-click="toggle_column_sort_menu"
+                    phx-value-state_name={column.state_name}
+                    aria-label={"Sort #{state_label(column.state_name)}"}
+                    aria-expanded={to_string(sort_menu_open?(@open_column_sort_menu, column.state_name))}
+                  >
+                    ...
+                  </button>
+                  <div
+                    :if={sort_menu_open?(@open_column_sort_menu, column.state_name)}
+                    class="column-sort-menu"
+                    role="menu"
+                  >
+                    <button
+                      :for={option <- column_sort_options(column)}
+                      type="button"
+                      class={["column-sort-option", selected_column_sort_key(column, @column_sorts) == option.key && "is-selected"]}
+                      phx-click="set_column_sort"
+                      phx-value-state_name={column.state_name}
+                      phx-value-sort_key={option.key}
+                      role="menuitem"
+                    >
+                      <span><%= option.label %></span>
+                      <small><%= option.description %></small>
+                    </button>
+                  </div>
+                </div>
                 <button
                   class="column-plus"
                   type="button"
@@ -343,7 +401,7 @@ defmodule SymphonyElixirWeb.BoardLive do
 
               <div class="ticket-list" data-state-name={column.state_name}>
                 <div
-                  :for={group <- grouped_tasks(column.tasks, @group_by, collapsed_group_keys(@payload, @group_by, column.state_name))}
+                  :for={group <- grouped_tasks(column_tasks, @group_by, collapsed_group_keys(@payload, @group_by, column.state_name))}
                   class={["issue-group", group.collapsed && "is-collapsed"]}
                 >
                   <button
@@ -416,7 +474,7 @@ defmodule SymphonyElixirWeb.BoardLive do
                   </article>
                 </div>
 
-                <div :if={column.tasks == []} class="empty-column">No tickets</div>
+                <div :if={column_tasks == []} class="empty-column">No tickets</div>
               </div>
 
               <button
@@ -1072,6 +1130,106 @@ defmodule SymphonyElixirWeb.BoardLive do
 
   defp issue_count_label([_task]), do: "ticket"
   defp issue_count_label(_tasks), do: "tickets"
+
+  defp sort_menu_open?(open_state, state_name), do: normalize_state(open_state) == normalize_state(state_name)
+
+  defp column_sort_options(column) do
+    if done_state?(Map.get(column, :state_name)) do
+      [
+        %{key: "done_time_desc", label: "Latest done", description: "Completion time"},
+        %{key: "updated_desc", label: "Recently updated", description: "Task update time"},
+        %{key: "board_order", label: "Board order", description: "Manual rank"}
+      ]
+    else
+      [
+        %{key: "board_order", label: "Board order", description: "Manual rank"},
+        %{key: "updated_desc", label: "Recently updated", description: "Task update time"},
+        %{key: "created_desc", label: "Newest created", description: "Creation time"},
+        %{key: "priority_asc", label: "Priority", description: "P1 first"},
+        %{key: "title_asc", label: "Title", description: "A to Z"}
+      ]
+    end
+  end
+
+  defp selected_column_sort_key(column, column_sorts) when is_map(column_sorts) do
+    column_sorts
+    |> Map.get(normalize_state(Map.get(column, :state_name)))
+    |> case do
+      key when is_binary(key) -> key
+      _missing -> default_column_sort_key(column)
+    end
+  end
+
+  defp selected_column_sort_key(column, _column_sorts), do: default_column_sort_key(column)
+
+  defp default_column_sort_key(column) do
+    if done_state?(Map.get(column, :state_name)), do: "done_time_desc", else: "board_order"
+  end
+
+  defp column_sort_key_allowed?(state_name, sort_key) when is_binary(sort_key) do
+    %{state_name: state_name}
+    |> column_sort_options()
+    |> Enum.any?(&(&1.key == sort_key))
+  end
+
+  defp column_sort_key_allowed?(_state_name, _sort_key), do: false
+
+  defp put_column_sort(column_sorts, state_name, sort_key) when is_map(column_sorts) do
+    column = %{state_name: state_name}
+    state_key = normalize_state(state_name)
+
+    if sort_key == default_column_sort_key(column) do
+      Map.delete(column_sorts, state_key)
+    else
+      Map.put(column_sorts, state_key, sort_key)
+    end
+  end
+
+  defp sorted_column_tasks(%{tasks: tasks} = column, column_sorts) when is_list(tasks) do
+    case selected_column_sort_key(column, column_sorts) do
+      "done_time_desc" -> sort_tasks_by_time_desc(tasks, :completed_at)
+      "updated_desc" -> sort_tasks_by_time_desc(tasks, :updated_at)
+      "created_desc" -> sort_tasks_by_time_desc(tasks, :created_at)
+      "priority_asc" -> Enum.sort_by(tasks, &{priority_sort_value(&1), task_title(&1)})
+      "title_asc" -> Enum.sort_by(tasks, &task_title/1)
+      _board_order -> tasks
+    end
+  end
+
+  defp sorted_column_tasks(_column, _column_sorts), do: []
+
+  defp sort_tasks_by_time_desc(tasks, key) when is_list(tasks) do
+    Enum.sort_by(tasks, fn task ->
+      {time_desc_sort_value(map_value(task, key)), task_title(task)}
+    end)
+  end
+
+  defp time_desc_sort_value(%DateTime{} = datetime), do: -DateTime.to_unix(datetime, :microsecond)
+
+  defp time_desc_sort_value(value) when is_binary(value) do
+    case DateTime.from_iso8601(value) do
+      {:ok, datetime, _offset} -> -DateTime.to_unix(datetime, :microsecond)
+      _invalid -> 9_223_372_036_854_775_807
+    end
+  end
+
+  defp time_desc_sort_value(_value), do: 9_223_372_036_854_775_807
+
+  defp priority_sort_value(task) when is_map(task) do
+    case Map.get(task, :priority) || Map.get(task, "priority") do
+      priority when is_integer(priority) -> priority
+      _priority -> 5
+    end
+  end
+
+  defp task_title(task) when is_map(task) do
+    task
+    |> map_value(:title)
+    |> to_string()
+    |> String.downcase()
+  end
+
+  defp done_state?(state_name), do: normalize_state(state_name) == "done"
 
   defp display_project_name(project_name, fallback \\ "Project")
 

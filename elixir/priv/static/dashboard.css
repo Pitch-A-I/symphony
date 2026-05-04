@@ -265,7 +265,7 @@ button {
   grid-auto-flow: column;
   gap: 0.58rem;
   overflow-x: auto;
-  overflow-y: hidden;
+  overflow-y: visible;
   min-width: 0;
   padding-bottom: 0.52rem;
   scrollbar-color: #d1d5db transparent;
@@ -355,6 +355,83 @@ button {
   justify-content: center;
   color: #9aa0aa;
   font-weight: 700;
+}
+
+.column-menu {
+  position: relative;
+  z-index: 30;
+}
+
+.column-menu-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.12rem;
+  height: 1.12rem;
+  border: 1px solid transparent;
+  border-radius: 0.26rem;
+  background: transparent;
+  color: #9aa0aa;
+  cursor: pointer;
+  font-size: 0.78rem;
+  font-weight: 800;
+  line-height: 1;
+}
+
+.column-menu-button:hover,
+.column-menu-button.is-active {
+  border-color: var(--board-border);
+  background: var(--board-surface-soft);
+  color: #596170;
+}
+
+.column-sort-menu {
+  position: absolute;
+  top: 1.42rem;
+  right: -0.12rem;
+  z-index: 90;
+  display: flex;
+  flex-direction: column;
+  width: 10.8rem;
+  gap: 0.12rem;
+  padding: 0.26rem;
+  border: 1px solid var(--board-border);
+  border-radius: 0.42rem;
+  background: #fff;
+  box-shadow: 0 12px 30px rgba(32, 34, 41, 0.14);
+}
+
+.column-sort-option {
+  display: grid;
+  width: 100%;
+  gap: 0.08rem;
+  padding: 0.38rem 0.42rem;
+  border: 0;
+  border-radius: 0.32rem;
+  background: transparent;
+  color: #363a44;
+  cursor: pointer;
+  text-align: left;
+}
+
+.column-sort-option:hover {
+  background: #f7f8fa;
+}
+
+.column-sort-option.is-selected {
+  background: #f1f5ff;
+  color: #244fb6;
+}
+
+.column-sort-option span {
+  font-size: 0.74rem;
+  font-weight: 760;
+}
+
+.column-sort-option small {
+  color: #8b93a1;
+  font-size: 0.66rem;
+  font-weight: 650;
 }
 
 .column-plus {
