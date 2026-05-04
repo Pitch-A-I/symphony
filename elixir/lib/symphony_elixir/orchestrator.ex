@@ -194,6 +194,7 @@ defmodule SymphonyElixir.Orchestrator do
 
       running_entry ->
         {updated_running_entry, token_delta} = integrate_codex_update(running_entry, update)
+        record_final_assistant_message_from_update(updated_running_entry, issue_id, update)
 
         state =
           state
@@ -1706,21 +1707,36 @@ defmodule SymphonyElixir.Orchestrator do
     end
   end
 
+  defp record_final_assistant_message_from_update(running_entry, issue_id, update) do
+    payload = update_payload(update)
+    method = payload_method(payload)
+
+    case assistant_completed_message(method, payload) do
+      {:ok, message, stream_id} ->
+        record_final_assistant_message(running_entry, issue_id, message, %{
+          method: method,
+          stream_id: stream_id,
+          timestamp: Map.get(update, :timestamp)
+        })
+
+      :error ->
+        :ok
+    end
+  end
+
   defp record_final_assistant_message(running_entry, issue_id) do
+    record_final_assistant_message(running_entry, issue_id, latest_assistant_message_text(running_entry), nil)
+  end
+
+  defp record_final_assistant_message(running_entry, issue_id, message, event_metadata)
+       when is_binary(message) do
     with "pitchai_pm" <- Config.settings!().tracker.kind,
          client when is_atom(client) <- pitchai_pm_client(),
          true <- function_exported?(client, :upsert_assistant_final_message, 3),
-         message when is_binary(message) <- latest_assistant_message_text(running_entry) do
-      metadata =
-        %{
-          source: "app_server",
-          session_id: Map.get(running_entry, :session_id),
-          turn_count: Map.get(running_entry, :turn_count, 0),
-          issue_identifier: Map.get(running_entry, :identifier),
-          recorded_at: DateTime.utc_now() |> DateTime.truncate(:second) |> DateTime.to_iso8601()
-        }
+         cleaned_message when is_binary(cleaned_message) <- clean_assistant_text(message) do
+      metadata = assistant_final_metadata(running_entry, event_metadata)
 
-      case client.upsert_assistant_final_message(issue_id, message, metadata) do
+      case client.upsert_assistant_final_message(issue_id, cleaned_message, metadata) do
         :ok ->
           :ok
 
@@ -1732,11 +1748,57 @@ defmodule SymphonyElixir.Orchestrator do
     end
   end
 
-  defp latest_assistant_message_text(running_entry) do
-    running_entry
-    |> Map.get(:recent_codex_events, [])
-    |> Enum.find_value(&assistant_text_from_recent_event/1)
+  defp record_final_assistant_message(_running_entry, _issue_id, _message, _event_metadata), do: :ok
+
+  defp assistant_final_metadata(running_entry, event_metadata) do
+    %{
+      source: "app_server",
+      session_id: Map.get(running_entry, :session_id),
+      turn_count: Map.get(running_entry, :turn_count, 0),
+      issue_identifier: Map.get(running_entry, :identifier),
+      event_method: event_metadata_value(event_metadata, :method),
+      event_stream_id: event_metadata_value(event_metadata, :stream_id),
+      event_timestamp: event_metadata_timestamp(event_metadata),
+      recorded_at: DateTime.utc_now() |> DateTime.truncate(:second) |> DateTime.to_iso8601()
+    }
   end
+
+  defp event_metadata_value(event_metadata, key) when is_map(event_metadata) do
+    case Map.get(event_metadata, key) do
+      value when is_binary(value) -> value
+      value when is_integer(value) -> Integer.to_string(value)
+      value when is_atom(value) -> Atom.to_string(value)
+      _value -> nil
+    end
+  end
+
+  defp event_metadata_value(_event_metadata, _key), do: nil
+
+  defp event_metadata_timestamp(event_metadata) when is_map(event_metadata) do
+    case Map.get(event_metadata, :timestamp) do
+      %DateTime{} = timestamp -> timestamp |> DateTime.truncate(:second) |> DateTime.to_iso8601()
+      timestamp when is_binary(timestamp) -> timestamp
+      _timestamp -> nil
+    end
+  end
+
+  defp event_metadata_timestamp(_event_metadata), do: nil
+
+  defp latest_assistant_message_text(running_entry) do
+    events = Map.get(running_entry, :recent_codex_events, [])
+
+    Enum.find_value(events, &final_assistant_text_from_recent_event/1) ||
+      Enum.find_value(events, &assistant_text_from_recent_event/1)
+  end
+
+  defp final_assistant_text_from_recent_event(event) when is_map(event) do
+    case Map.get(event, :assistant_message_kind) || Map.get(event, "assistant_message_kind") do
+      "final" -> assistant_text_from_recent_event(event)
+      _kind -> nil
+    end
+  end
+
+  defp final_assistant_text_from_recent_event(_event), do: nil
 
   defp assistant_text_from_recent_event(event) when is_map(event) do
     stream_kind = Map.get(event, :stream_kind) || Map.get(event, "stream_kind")

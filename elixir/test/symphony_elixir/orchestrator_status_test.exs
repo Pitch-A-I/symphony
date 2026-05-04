@@ -1,6 +1,38 @@
 defmodule SymphonyElixir.OrchestratorStatusTest do
   use SymphonyElixir.TestSupport
 
+  defmodule FakePitchAIPMClient do
+    def fetch_candidate_issues, do: {:ok, []}
+    def fetch_issues_by_states(_states), do: {:ok, []}
+    def fetch_issue_states_by_ids(_issue_ids), do: {:ok, []}
+
+    def reconcile_blocked_tasks do
+      {:ok,
+       %{
+         groups: 0,
+         blocked_tasks: 0,
+         released_resolved_blocked_tasks: 0,
+         created_blocker_tasks: 0,
+         reopened_blocker_tasks: 0,
+         merged_duplicate_blocker_tasks: 0,
+         linked_dependencies: 0,
+         created_reconciliation_agent_tasks: 0,
+         updated_reconciliation_agent_tasks: 0,
+         skipped_reconciliation_agent_tasks: 0,
+         blocker_task_ids: [],
+         reconciliation_agent_task_ids: []
+       }}
+    end
+
+    def upsert_assistant_final_message(task_id, body, metadata) do
+      if recipient = Application.get_env(:symphony_elixir, :assistant_final_test_recipient) do
+        send(recipient, {:assistant_final_message_upserted, task_id, body, metadata})
+      end
+
+      :ok
+    end
+  end
+
   test "snapshot returns :timeout when snapshot server is unresponsive" do
     server_name = Module.concat(__MODULE__, :UnresponsiveSnapshotServer)
     parent = self()
@@ -209,6 +241,132 @@ defmodule SymphonyElixir.OrchestratorStatusTest do
     assert final_event.message == "assistant final: Grouped canonical blocker final message"
     refute Enum.any?(snapshot_entry.recent_codex_events, &(Map.get(&1, :method) == "custom/event/20"))
     refute stream_event.message =~ "agent message streaming"
+  end
+
+  test "orchestrator persists completed assistant messages as they arrive" do
+    Process.flag(:trap_exit, true)
+
+    issue_id = "issue-final-persist"
+    event_timestamp = DateTime.utc_now()
+
+    original_client = Application.get_env(:symphony_elixir, :pitchai_pm_client_module)
+    original_recipient = Application.get_env(:symphony_elixir, :assistant_final_test_recipient)
+
+    Application.put_env(:symphony_elixir, :pitchai_pm_client_module, FakePitchAIPMClient)
+    Application.put_env(:symphony_elixir, :assistant_final_test_recipient, self())
+
+    on_exit(fn ->
+      if is_nil(original_client) do
+        Application.delete_env(:symphony_elixir, :pitchai_pm_client_module)
+      else
+        Application.put_env(:symphony_elixir, :pitchai_pm_client_module, original_client)
+      end
+
+      if is_nil(original_recipient) do
+        Application.delete_env(:symphony_elixir, :assistant_final_test_recipient)
+      else
+        Application.put_env(:symphony_elixir, :assistant_final_test_recipient, original_recipient)
+      end
+    end)
+
+    issue = %Issue{
+      id: issue_id,
+      identifier: "MT-190",
+      title: "Persist final message",
+      description: "Store app-server assistant final messages",
+      state: "In Progress",
+      url: "https://example.org/issues/MT-190"
+    }
+
+    orchestrator_name = Module.concat(__MODULE__, :FinalAssistantPersistOrchestrator)
+    {:ok, pid} = GenServer.start(Orchestrator, [], name: orchestrator_name)
+    initial_state = :sys.get_state(pid)
+
+    if is_reference(initial_state.tick_timer_ref) do
+      Process.cancel_timer(initial_state.tick_timer_ref)
+    end
+
+    :sys.replace_state(pid, fn state ->
+      %{state | tick_timer_ref: nil, tick_token: nil, next_poll_due_at_ms: nil, poll_check_in_progress: false}
+    end)
+
+    Process.sleep(50)
+
+    write_workflow_file!(Workflow.workflow_file_path(),
+      tracker_kind: "pitchai_pm",
+      tracker_project_id: "project-pm",
+      tracker_database_url: "postgres://postgres:postgres@example.invalid/pm"
+    )
+
+    on_exit(fn ->
+      if Process.alive?(pid) do
+        Process.exit(pid, :normal)
+      end
+    end)
+
+    running_entry = %{
+      pid: self(),
+      ref: make_ref(),
+      identifier: issue.identifier,
+      issue: issue,
+      session_id: "thread-final-turn-1",
+      turn_count: 1,
+      last_codex_message: nil,
+      last_codex_timestamp: nil,
+      last_codex_event: nil,
+      recent_codex_events: [],
+      started_at: DateTime.utc_now()
+    }
+
+    :sys.replace_state(pid, fn state ->
+      state
+      |> Map.put(:running, %{issue_id => running_entry})
+      |> Map.put(:claimed, MapSet.put(initial_state.claimed, issue_id))
+    end)
+
+    send(
+      pid,
+      {:codex_worker_update, issue_id,
+       %{
+         event: :notification,
+         payload: %{
+           "method" => "codex/event/agent_message_delta",
+           "params" => %{"msg" => %{"payload" => %{"delta" => "draft only"}}}
+         },
+         timestamp: event_timestamp
+       }}
+    )
+
+    refute_receive {:assistant_final_message_upserted, ^issue_id, _, _}, 100
+
+    send(
+      pid,
+      {:codex_worker_update, issue_id,
+       %{
+         event: :notification,
+         payload: %{
+           "method" => "item/completed",
+           "params" => %{
+             "item" => %{
+               "id" => "assistant-final-1",
+               "type" => "agentMessage",
+               "content" => [%{"type" => "text", "text" => "Implemented the requested fix."}]
+             }
+           }
+         },
+         timestamp: event_timestamp
+       }}
+    )
+
+    assert_receive {:assistant_final_message_upserted, ^issue_id, "Implemented the requested fix.", metadata}, 1_000
+    assert metadata.source == "app_server"
+    assert metadata.session_id == "thread-final-turn-1"
+    assert metadata.turn_count == 1
+    assert metadata.issue_identifier == "MT-190"
+    assert metadata.event_method == "item/completed"
+    assert metadata.event_stream_id == "assistant-final-1"
+    assert metadata.event_timestamp == DateTime.to_iso8601(DateTime.truncate(event_timestamp, :second))
+    assert is_binary(metadata.recorded_at)
   end
 
   test "orchestrator snapshot tracks codex thread totals and app-server pid" do
