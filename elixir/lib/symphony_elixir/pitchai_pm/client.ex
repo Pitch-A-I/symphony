@@ -116,6 +116,8 @@ defmodule SymphonyElixir.PitchAIPM.Client do
     t.name as title,
     coalesce(t.description::text, '') as description,
     t.state_name as state,
+    t.project_id::text as project_id,
+    p.name as project_name,
     tr.priority as priority,
     tr.branch_name as branch_name,
     coalesce(tr.url, '') as url,
@@ -135,6 +137,7 @@ defmodule SymphonyElixir.PitchAIPM.Client do
     )::text as blocked_by_json
   from public.tasks t
   left join pitchai_symphony.task_tracking tr on tr.task_id = t.id
+  left join public.projects p on p.id = t.project_id
   left join pitchai_symphony.task_dependencies dep
     on dep.task_id = t.id
    and dep.relation_type = 'blocked_by'
@@ -148,6 +151,8 @@ defmodule SymphonyElixir.PitchAIPM.Client do
     t.name,
     t.description,
     t.state_name,
+    t.project_id,
+    p.name,
     tr.priority,
     tr.branch_name,
     tr.url,
@@ -2287,6 +2292,8 @@ defmodule SymphonyElixir.PitchAIPM.Client do
       description: data["description"],
       priority: data["priority"],
       state: data["state"],
+      project_id: clean_string(data["project_id"]),
+      project_name: clean_string(data["project_name"]),
       branch_name: clean_string(data["branch_name"]),
       url: issue_url(data["id"], data["url"]),
       assignee_id: clean_string(data["assignee_id"]),
@@ -2306,6 +2313,8 @@ defmodule SymphonyElixir.PitchAIPM.Client do
       "description" => issue.description,
       "priority" => issue.priority,
       "state" => issue.state,
+      "project_id" => issue.project_id,
+      "project_name" => issue.project_name,
       "branch_name" => issue.branch_name,
       "url" => issue.url,
       "assignee_id" => issue.assignee_id,

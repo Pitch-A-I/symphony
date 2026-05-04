@@ -644,6 +644,85 @@ defmodule SymphonyElixir.WorkspaceAndConfigTest do
     assert Orchestrator.should_dispatch_issue_for_test(issue, state)
   end
 
+  test "merging state concurrency is scoped per project" do
+    write_workflow_file!(Workflow.workflow_file_path(),
+      tracker_active_states: ["Todo", "In Progress", "Merging"],
+      max_concurrent_agents_by_state: %{"Merging" => 1}
+    )
+
+    state = %Orchestrator.State{
+      max_concurrent_agents: 3,
+      running: %{
+        "merge-project-a-running" => %{
+          issue: %Issue{
+            id: "merge-project-a-running",
+            identifier: "PM-A0",
+            title: "Running merge A",
+            state: "Merging",
+            project_id: "project-a"
+          }
+        }
+      },
+      claimed: MapSet.new(),
+      codex_totals: %{input_tokens: 0, output_tokens: 0, total_tokens: 0, seconds_running: 0},
+      retry_attempts: %{}
+    }
+
+    same_project_issue = %Issue{
+      id: "merge-project-a-next",
+      identifier: "PM-A1",
+      title: "Next merge A",
+      state: "Merging",
+      project_id: "project-a"
+    }
+
+    other_project_issue = %Issue{
+      id: "merge-project-b-next",
+      identifier: "PM-B1",
+      title: "Next merge B",
+      state: "Merging",
+      project_id: "project-b"
+    }
+
+    refute Orchestrator.should_dispatch_issue_for_test(same_project_issue, state)
+    assert Orchestrator.should_dispatch_issue_for_test(other_project_issue, state)
+  end
+
+  test "non-merging state concurrency remains global" do
+    write_workflow_file!(Workflow.workflow_file_path(),
+      tracker_active_states: ["Todo", "In Progress"],
+      max_concurrent_agents_by_state: %{"Todo" => 1}
+    )
+
+    state = %Orchestrator.State{
+      max_concurrent_agents: 3,
+      running: %{
+        "todo-project-a-running" => %{
+          issue: %Issue{
+            id: "todo-project-a-running",
+            identifier: "PM-A0",
+            title: "Running todo A",
+            state: "Todo",
+            project_id: "project-a"
+          }
+        }
+      },
+      claimed: MapSet.new(),
+      codex_totals: %{input_tokens: 0, output_tokens: 0, total_tokens: 0, seconds_running: 0},
+      retry_attempts: %{}
+    }
+
+    issue = %Issue{
+      id: "todo-project-b-next",
+      identifier: "PM-B1",
+      title: "Next todo B",
+      state: "Todo",
+      project_id: "project-b"
+    }
+
+    refute Orchestrator.should_dispatch_issue_for_test(issue, state)
+  end
+
   test "dispatch revalidation skips stale todo issue once a non-terminal blocker appears" do
     stale_issue = %Issue{
       id: "blocked-2",

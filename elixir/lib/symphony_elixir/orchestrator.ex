@@ -620,25 +620,70 @@ defmodule SymphonyElixir.Orchestrator do
 
   defp should_dispatch_issue?(_issue, _state, _active_states, _terminal_states), do: false
 
-  defp state_slots_available?(%Issue{state: issue_state}, running) when is_map(running) do
+  defp state_slots_available?(%Issue{state: issue_state} = issue, running) when is_map(running) do
     limit = Config.max_concurrent_agents_for_state(issue_state)
-    used = running_issue_count_for_state(running, issue_state)
+    used = running_issue_count_for_state(running, issue_state, state_concurrency_scope(issue))
     limit > used
   end
 
   defp state_slots_available?(_issue, _running), do: false
 
-  defp running_issue_count_for_state(running, issue_state) when is_map(running) do
+  defp running_issue_count_for_state(running, issue_state, concurrency_scope) when is_map(running) do
     normalized_state = normalize_issue_state(issue_state)
 
     Enum.count(running, fn
-      {_id, %{issue: %Issue{state: state_name}}} ->
-        normalize_issue_state(state_name) == normalized_state
+      {_id, %{issue: %Issue{} = running_issue}} ->
+        issue_matches_state_and_scope?(running_issue, normalized_state, concurrency_scope)
+
+      {_id, %{issue_state: state_name} = running_entry} ->
+        normalize_issue_state(state_name) == normalized_state and
+          running_entry_matches_scope?(running_entry, concurrency_scope)
 
       _ ->
         false
     end)
   end
+
+  defp issue_matches_state_and_scope?(%Issue{state: state_name} = issue, normalized_state, concurrency_scope) do
+    normalize_issue_state(state_name) == normalized_state and issue_matches_scope?(issue, concurrency_scope)
+  end
+
+  defp issue_matches_scope?(_issue, :global), do: true
+
+  defp issue_matches_scope?(%Issue{} = issue, {:project, project_id}) do
+    running_project_id = issue_project_id(issue)
+    is_nil(project_id) or is_nil(running_project_id) or running_project_id == project_id
+  end
+
+  defp running_entry_matches_scope?(_running_entry, :global), do: true
+
+  defp running_entry_matches_scope?(running_entry, {:project, project_id}) when is_map(running_entry) do
+    running_project_id = running_entry_project_id(running_entry)
+    is_nil(project_id) or is_nil(running_project_id) or running_project_id == project_id
+  end
+
+  defp state_concurrency_scope(%Issue{state: state_name} = issue) do
+    if normalize_issue_state(state_name) == "merging" do
+      {:project, issue_project_id(issue)}
+    else
+      :global
+    end
+  end
+
+  defp issue_project_id(%Issue{project_id: project_id}), do: normalize_project_id(project_id)
+
+  defp running_entry_project_id(%{project_id: project_id}), do: normalize_project_id(project_id)
+  defp running_entry_project_id(%{"project_id" => project_id}), do: normalize_project_id(project_id)
+  defp running_entry_project_id(_running_entry), do: nil
+
+  defp normalize_project_id(project_id) when is_binary(project_id) do
+    case String.trim(project_id) do
+      "" -> nil
+      normalized_project_id -> normalized_project_id
+    end
+  end
+
+  defp normalize_project_id(_project_id), do: nil
 
   defp candidate_issue?(
          %Issue{
@@ -759,6 +804,9 @@ defmodule SymphonyElixir.Orchestrator do
             ref: ref,
             identifier: issue.identifier,
             issue: issue,
+            issue_state: issue.state,
+            project_id: issue.project_id,
+            project_name: issue.project_name,
             worker_host: worker_host,
             workspace_path: nil,
             session_id: nil,

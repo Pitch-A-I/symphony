@@ -754,8 +754,6 @@ defmodule SymphonyElixirWeb.Presenter do
       |> strip_assistant_prefix()
   end
 
-  defp assistant_message_body(_event), do: nil
-
   defp strip_assistant_prefix(message) when is_binary(message) do
     message
     |> String.replace_prefix("assistant final: ", "")
