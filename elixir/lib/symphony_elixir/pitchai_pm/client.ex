@@ -4,6 +4,7 @@ defmodule SymphonyElixir.PitchAIPM.Client do
   """
 
   alias SymphonyElixir.Config
+  alias SymphonyElixir.GitHub.Client, as: GitHubClient
   alias SymphonyElixir.Linear.Issue
   alias SymphonyElixir.PitchAIPM.BlockerReconciler
 
@@ -472,6 +473,169 @@ defmodule SymphonyElixir.PitchAIPM.Client do
 
     case query(sql, [task_id, body, Jason.encode!(metadata)]) do
       {:ok, _result} -> :ok
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  @spec human_review_pr_links() :: {:ok, [map()]} | {:error, term()}
+  def human_review_pr_links do
+    sql = """
+    select
+      t.id::text as task_id,
+      coalesce(nullif(trim(t.public_id), ''), 'PM-' || substring(t.id::text, 1, 8)) as identifier,
+      t.name as title,
+      pr.id as pr_link_id,
+      pr.url,
+      coalesce(nullif(trim(pr.repo_full_name), ''), nullif(trim(tr.repo_full_name), '')) as repo_full_name,
+      coalesce(nullif(trim(pr.branch_name), ''), nullif(trim(tr.branch_name), '')) as branch_name,
+      coalesce(nullif(trim(tr.workspace_path), ''), '') as workspace_path,
+      (
+        select c.metadata->>'session_id'
+        from pitchai_symphony.task_comments c
+        where c.task_id = t.id
+          and c.kind = 'assistant_final'
+          and nullif(trim(c.metadata->>'session_id'), '') is not null
+        order by c.created_at desc, c.id desc
+        limit 1
+      ) as session_id
+    from public.tasks t
+    join pitchai_symphony.task_pr_links pr on pr.task_id = t.id
+    left join pitchai_symphony.task_tracking tr on tr.task_id = t.id
+    where lower(trim(coalesce(t.state_name, ''))) = 'human review'
+      and lower(trim(coalesce(pr.state, 'open'))) <> 'closed'
+    order by pr.updated_at desc, pr.id desc
+    limit 100
+    """
+
+    case query(sql, []) do
+      {:ok, %{rows: rows, columns: columns}} ->
+        {:ok, Enum.map(rows, &human_review_pr_link_row_to_map(columns, &1))}
+
+      {:error, reason} ->
+        {:error, reason}
+    end
+  end
+
+  @spec sync_github_pr_comments(map(), [map()]) :: {:ok, map()} | {:error, term()}
+  def sync_github_pr_comments(pr_link, comments) when is_map(pr_link) and is_list(comments) do
+    pr_link_id = Map.fetch!(pr_link, :pr_link_id)
+    task_id = Map.fetch!(pr_link, :task_id)
+    repo_full_name = Map.fetch!(pr_link, :repo_full_name)
+    pr_number = Map.fetch!(pr_link, :pr_number)
+    max_seen_at = latest_comment_timestamp(comments)
+
+    with {:ok, baseline?} <- ensure_pr_comment_cursor(pr_link_id, task_id, repo_full_name, pr_number, max_seen_at),
+         {:ok, last_seen_at} <- pr_comment_cursor_seen_at(pr_link_id),
+         {:ok, inserted} <-
+           insert_new_github_pr_comments(pr_link, comments_for_insert(comments, baseline?, last_seen_at)),
+         :ok <- update_pr_comment_cursor(pr_link_id, max_seen_at) do
+      {:ok, %{baseline?: baseline?, inserted: inserted}}
+    end
+  end
+
+  @spec claim_pending_github_pr_comment(String.t()) :: {:ok, map() | nil} | {:error, term()}
+  def claim_pending_github_pr_comment(worker_id) when is_binary(worker_id) do
+    sql = """
+    with candidate as (
+      select id
+      from pitchai_symphony.github_pr_comment_responses
+      where status = 'pending'
+        and next_attempt_at <= now()
+      order by github_created_at asc, id asc
+      limit 1
+      for update skip locked
+    ),
+    updated as (
+      update pitchai_symphony.github_pr_comment_responses r
+      set status = 'processing',
+          attempts = attempts + 1,
+          metadata = metadata || jsonb_build_object('worker_id', $1::text, 'claimed_at', to_char(now() at time zone 'utc', 'YYYY-MM-DD"T"HH24:MI:SS"Z"')),
+          updated_at = now()
+      from candidate c
+      where r.id = c.id
+      returning r.*
+    )
+    select
+      r.id,
+      r.task_id::text,
+      r.pr_link_id,
+      r.repo_full_name,
+      r.pr_number,
+      r.comment_kind,
+      r.github_comment_id,
+      r.github_comment_url,
+      r.author_login,
+      r.body,
+      r.github_created_at,
+      r.attempts,
+      r.session_id,
+      r.thread_id,
+      r.metadata::text,
+      coalesce(nullif(trim(t.public_id), ''), 'PM-' || substring(t.id::text, 1, 8)) as identifier,
+      t.name as title,
+      coalesce(nullif(trim(tr.workspace_path), ''), '') as workspace_path
+    from updated r
+    join public.tasks t on t.id = r.task_id
+    left join pitchai_symphony.task_tracking tr on tr.task_id = t.id
+    """
+
+    case query(sql, [worker_id]) do
+      {:ok, %{rows: [row], columns: columns}} -> {:ok, github_pr_comment_row_to_map(columns, row)}
+      {:ok, %{rows: []}} -> {:ok, nil}
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  @spec mark_github_pr_comment_responded(pos_integer(), String.t(), String.t() | nil, String.t() | nil) ::
+          :ok | {:error, term()}
+  def mark_github_pr_comment_responded(response_id, response_body, github_comment_id, response_url)
+      when is_integer(response_id) and is_binary(response_body) do
+    sql = """
+    with updated_response as (
+      update pitchai_symphony.github_pr_comment_responses
+      set status = 'responded',
+          response_body = $2::text,
+          response_github_comment_id = $3::text,
+          response_url = $4::text,
+          error = null,
+          responded_at = now(),
+          updated_at = now()
+      where id = $1::int8
+      returning task_id, body, response_body, github_comment_url, response_url
+    )
+    insert into pitchai_symphony.task_comments(task_id, body, author, kind, metadata)
+    select
+      task_id,
+      'Responded to GitHub PR review comment.' || E'\\n\\nHuman comment:' || E'\\n' || body || E'\\n\\nAssistant response:' || E'\\n' || response_body,
+      'symphony',
+      'pr_review_response',
+      jsonb_build_object('github_comment_url', github_comment_url, 'response_url', response_url)
+    from updated_response
+    returning task_id::text
+    """
+
+    case query(sql, [response_id, response_body, github_comment_id, response_url]) do
+      {:ok, %{num_rows: 1}} -> :ok
+      {:ok, %{num_rows: 0}} -> {:error, :github_pr_comment_response_not_found}
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  @spec mark_github_pr_comment_failed(pos_integer(), String.t(), non_neg_integer()) :: :ok | {:error, term()}
+  def mark_github_pr_comment_failed(response_id, error, retry_delay_seconds)
+      when is_integer(response_id) and is_binary(error) and is_integer(retry_delay_seconds) do
+    sql = """
+    update pitchai_symphony.github_pr_comment_responses
+    set status = case when attempts >= 3 then 'failed' else 'pending' end,
+        error = $2::text,
+        next_attempt_at = case when attempts >= 3 then next_attempt_at else now() + ($3::int4 * interval '1 second') end,
+        updated_at = now()
+    where id = $1::int8
+    """
+
+    case query(sql, [response_id, error, retry_delay_seconds]) do
+      {:ok, %{num_rows: 1}} -> :ok
+      {:ok, %{num_rows: 0}} -> {:error, :github_pr_comment_response_not_found}
       {:error, reason} -> {:error, reason}
     end
   end
@@ -2435,6 +2599,246 @@ defmodule SymphonyElixir.PitchAIPM.Client do
       blockers: decode_json_array(data["blockers_json"]),
       created_at: encode_datetime(data["created_at"]),
       updated_at: encode_datetime(data["updated_at"])
+    }
+  end
+
+  defp human_review_pr_link_row_to_map(columns, row) do
+    data = columns |> Enum.zip(row) |> Map.new()
+    pr_number = github_pr_number_from_url(data["url"])
+    session_id = clean_string(data["session_id"])
+
+    %{
+      task_id: data["task_id"],
+      identifier: data["identifier"],
+      title: data["title"],
+      pr_link_id: data["pr_link_id"],
+      url: clean_string(data["url"]),
+      repo_full_name: clean_string(data["repo_full_name"]),
+      branch_name: clean_string(data["branch_name"]),
+      workspace_path: clean_string(data["workspace_path"]),
+      session_id: session_id,
+      thread_id: thread_id_from_session_id(session_id),
+      pr_number: pr_number
+    }
+  end
+
+  defp github_pr_number_from_url(url) when is_binary(url) do
+    case Regex.run(~r{github\.com/[^/\s]+/[^/\s]+/pull/(\d+)}i, url) do
+      [_match, pr_number] -> String.to_integer(pr_number)
+      _no_match -> nil
+    end
+  end
+
+  defp github_pr_number_from_url(_url), do: nil
+
+  defp thread_id_from_session_id(session_id) when is_binary(session_id) do
+    session_id
+    |> String.trim()
+    |> case do
+      <<thread_id::binary-size(36), "-", _turn_id::binary>> -> thread_id
+      value -> value
+    end
+  end
+
+  defp thread_id_from_session_id(_session_id), do: nil
+
+  defp ensure_pr_comment_cursor(pr_link_id, task_id, repo_full_name, pr_number, max_seen_at) do
+    sql = """
+    insert into pitchai_symphony.github_pr_comment_cursors(
+      pr_link_id,
+      task_id,
+      repo_full_name,
+      pr_number,
+      last_seen_at,
+      metadata
+    )
+    values (
+      $1::int8,
+      $2::text::uuid,
+      $3::text,
+      $4::int4,
+      $5::text::timestamptz,
+      jsonb_build_object('source', 'initial_github_pr_comment_baseline')
+    )
+    on conflict (pr_link_id) do nothing
+    returning pr_link_id
+    """
+
+    case query(sql, [pr_link_id, task_id, repo_full_name, pr_number, encode_datetime(max_seen_at)]) do
+      {:ok, %{num_rows: 1}} -> {:ok, true}
+      {:ok, %{num_rows: 0}} -> {:ok, false}
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  defp pr_comment_cursor_seen_at(pr_link_id) do
+    sql = """
+    select last_seen_at
+    from pitchai_symphony.github_pr_comment_cursors
+    where pr_link_id = $1::int8
+    """
+
+    case query(sql, [pr_link_id]) do
+      {:ok, %{rows: [[last_seen_at]]}} -> {:ok, last_seen_at}
+      {:ok, %{rows: []}} -> {:error, :github_pr_comment_cursor_missing}
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  defp update_pr_comment_cursor(_pr_link_id, nil), do: :ok
+
+  defp update_pr_comment_cursor(pr_link_id, max_seen_at) do
+    sql = """
+    update pitchai_symphony.github_pr_comment_cursors
+    set last_seen_at = greatest(coalesce(last_seen_at, '-infinity'::timestamptz), $2::text::timestamptz),
+        updated_at = now()
+    where pr_link_id = $1::int8
+    """
+
+    case query(sql, [pr_link_id, encode_datetime(max_seen_at)]) do
+      {:ok, _result} -> :ok
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  defp latest_comment_timestamp(comments) when is_list(comments) do
+    comments
+    |> Enum.map(&comment_created_at/1)
+    |> Enum.reject(&is_nil/1)
+    |> Enum.max_by(&DateTime.to_unix(&1, :microsecond), fn -> nil end)
+  end
+
+  defp comments_for_insert(_comments, true, _last_seen_at), do: []
+
+  defp comments_for_insert(comments, false, last_seen_at) when is_list(comments) do
+    comments
+    |> Enum.reject(&ignored_github_comment?/1)
+    |> Enum.filter(&comment_after?(&1, last_seen_at))
+  end
+
+  defp ignored_github_comment?(comment) when is_map(comment) do
+    body = Map.get(comment, :body) || Map.get(comment, "body")
+    author_type = Map.get(comment, :author_type) || Map.get(comment, "author_type")
+
+    clean_string(body) == nil or
+      String.downcase(to_string(author_type)) == "bot" or
+      GitHubClient.bot_response?(body)
+  end
+
+  defp comment_after?(comment, nil), do: not is_nil(comment_created_at(comment))
+
+  defp comment_after?(comment, %DateTime{} = last_seen_at) do
+    case comment_created_at(comment) do
+      %DateTime{} = created_at -> DateTime.compare(created_at, last_seen_at) == :gt
+      nil -> false
+    end
+  end
+
+  defp comment_after?(_comment, _last_seen_at), do: false
+
+  defp comment_created_at(comment) when is_map(comment) do
+    case Map.get(comment, :created_at) || Map.get(comment, "created_at") do
+      %DateTime{} = created_at ->
+        created_at
+
+      created_at when is_binary(created_at) ->
+        case DateTime.from_iso8601(created_at) do
+          {:ok, datetime, _offset} -> datetime
+          {:error, _reason} -> nil
+        end
+
+      _created_at ->
+        nil
+    end
+  end
+
+  defp insert_new_github_pr_comments(pr_link, comments) do
+    Enum.reduce_while(comments, {:ok, 0}, fn comment, {:ok, count} ->
+      case insert_new_github_pr_comment(pr_link, comment) do
+        {:ok, inserted?} -> {:cont, {:ok, count + if(inserted?, do: 1, else: 0)}}
+        {:error, reason} -> {:halt, {:error, reason}}
+      end
+    end)
+  end
+
+  defp insert_new_github_pr_comment(pr_link, comment) do
+    sql = """
+    insert into pitchai_symphony.github_pr_comment_responses(
+      task_id,
+      pr_link_id,
+      repo_full_name,
+      pr_number,
+      comment_kind,
+      github_comment_id,
+      github_comment_url,
+      author_login,
+      body,
+      github_created_at,
+      session_id,
+      thread_id,
+      metadata
+    )
+    values (
+      $1::text::uuid,
+      $2::int8,
+      $3::text,
+      $4::int4,
+      $5::text,
+      $6::text,
+      $7::text,
+      $8::text,
+      $9::text,
+      $10::text::timestamptz,
+      $11::text,
+      $12::text,
+      jsonb_build_object('source', 'github_pr_comment_bridge')
+    )
+    on conflict (repo_full_name, pr_number, comment_kind, github_comment_id) do nothing
+    returning id
+    """
+
+    case query(sql, [
+           Map.fetch!(pr_link, :task_id),
+           Map.fetch!(pr_link, :pr_link_id),
+           Map.fetch!(pr_link, :repo_full_name),
+           Map.fetch!(pr_link, :pr_number),
+           Map.get(comment, :kind),
+           Map.get(comment, :id),
+           Map.get(comment, :html_url),
+           Map.get(comment, :author_login),
+           Map.get(comment, :body),
+           encode_datetime(comment_created_at(comment)),
+           Map.get(pr_link, :session_id),
+           Map.get(pr_link, :thread_id)
+         ]) do
+      {:ok, %{num_rows: 1}} -> {:ok, true}
+      {:ok, %{num_rows: 0}} -> {:ok, false}
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  defp github_pr_comment_row_to_map(columns, row) do
+    data = columns |> Enum.zip(row) |> Map.new()
+
+    %{
+      id: data["id"],
+      task_id: data["task_id"],
+      pr_link_id: data["pr_link_id"],
+      repo_full_name: data["repo_full_name"],
+      pr_number: data["pr_number"],
+      comment_kind: data["comment_kind"],
+      github_comment_id: data["github_comment_id"],
+      github_comment_url: clean_string(data["github_comment_url"]),
+      author_login: clean_string(data["author_login"]),
+      body: data["body"],
+      github_created_at: encode_datetime(data["github_created_at"]),
+      attempts: data["attempts"],
+      session_id: clean_string(data["session_id"]),
+      thread_id: clean_string(data["thread_id"]) || thread_id_from_session_id(data["session_id"]),
+      metadata: decode_json_object(data["metadata"]),
+      identifier: data["identifier"],
+      title: data["title"],
+      workspace_path: clean_string(data["workspace_path"])
     }
   end
 
