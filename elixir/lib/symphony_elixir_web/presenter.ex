@@ -227,6 +227,17 @@ defmodule SymphonyElixirWeb.Presenter do
     end
   end
 
+  @spec set_board_column_sort(String.t(), String.t()) :: :ok | {:error, term()}
+  def set_board_column_sort(column_state_name, sort_key) when is_binary(column_state_name) and is_binary(sort_key) do
+    case Config.settings!().tracker.kind do
+      "pitchai_pm" ->
+        pitchai_pm_client().set_board_column_sort(column_state_name, sort_key)
+
+      other ->
+        {:error, {:unsupported_board_tracker, other}}
+    end
+  end
+
   @spec create_board_task(map(), GenServer.name(), timeout()) :: {:ok, map()} | {:error, term()}
   def create_board_task(params, orchestrator, snapshot_timeout_ms) when is_map(params) do
     runtime = dashboard_payload(orchestrator, snapshot_timeout_ms)

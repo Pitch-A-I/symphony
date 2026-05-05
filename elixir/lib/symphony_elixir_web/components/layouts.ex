@@ -100,6 +100,26 @@ defmodule SymphonyElixirWeb.Layouts do
               markFocusedTaskCard(card, target.taskId);
             }
 
+            window.__symphonyToggleIssueGroup = function (button) {
+              if (!button) return;
+
+              var group = button.closest(".issue-group");
+              if (!group) return;
+
+              var nextCollapsed = button.getAttribute("phx-value-collapsed") === "true";
+              group.classList.toggle("is-client-collapsed", nextCollapsed);
+              group.classList.toggle("is-collapsed", nextCollapsed);
+              group.setAttribute("data-collapsed", String(nextCollapsed));
+              button.setAttribute("aria-expanded", String(!nextCollapsed));
+
+              var chevron = button.querySelector(".group-chevron");
+              if (chevron) chevron.classList.toggle("is-collapsed", nextCollapsed);
+
+              window.setTimeout(function () {
+                button.setAttribute("phx-value-collapsed", String(!nextCollapsed));
+              }, 0);
+            };
+
             var Hooks = {};
 
             Hooks.ModalScrollLock = {
@@ -215,6 +235,12 @@ defmodule SymphonyElixirWeb.Layouts do
               },
 
               handleClick: function (event) {
+                var groupButton = event.target.closest(".issue-group-label");
+                if (groupButton && this.el.contains(groupButton)) {
+                  this.toggleIssueGroupImmediately(groupButton);
+                  return;
+                }
+
                 var card = event.target.closest(".ticket-card");
                 if (!card) return;
 
@@ -233,6 +259,10 @@ defmodule SymphonyElixirWeb.Layouts do
                 event.preventDefault();
                 event.stopPropagation();
                 this.pushEvent("open_task", {task_id: taskId});
+              },
+
+              toggleIssueGroupImmediately: function (button) {
+                window.__symphonyToggleIssueGroup(button);
               },
 
               handleFocusTaskCard: function (payload) {

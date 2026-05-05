@@ -66,6 +66,14 @@ defmodule SymphonyElixir.ExtensionsTest do
       :ok
     end
 
+    def set_board_column_sort(column_state_name, sort_key) do
+      if recipient = Application.get_env(:symphony_elixir, :pitchai_pm_test_recipient) do
+        send(recipient, {:pitchai_pm_set_board_column_sort, column_state_name, sort_key})
+      end
+
+      :ok
+    end
+
     def move_issue_on_board(task_id, state_name, opts) do
       if recipient = Application.get_env(:symphony_elixir, :pitchai_pm_test_recipient) do
         send(recipient, {:pitchai_pm_move_issue_on_board, task_id, state_name, opts})
@@ -79,6 +87,7 @@ defmodule SymphonyElixir.ExtensionsTest do
        %{
          project: %{id: "project-pm", name: "TODO App"},
          collapsed_groups: Application.get_env(:symphony_elixir, :pitchai_pm_fake_collapsed_groups, []),
+         column_sorts: Application.get_env(:symphony_elixir, :pitchai_pm_fake_column_sorts, %{}),
          project_options: [
            %{id: "project-pm", name: "TODO App"},
            %{id: "project-driestar", name: "Driestar — AI Pilot Regie (Formatief Toetsen)"}
@@ -609,6 +618,7 @@ defmodule SymphonyElixir.ExtensionsTest do
     pitchai_pm_client_module = Application.get_env(:symphony_elixir, :pitchai_pm_client_module)
     pitchai_pm_test_recipient = Application.get_env(:symphony_elixir, :pitchai_pm_test_recipient)
     pitchai_pm_fake_collapsed_groups = Application.get_env(:symphony_elixir, :pitchai_pm_fake_collapsed_groups)
+    pitchai_pm_fake_column_sorts = Application.get_env(:symphony_elixir, :pitchai_pm_fake_column_sorts)
 
     on_exit(fn ->
       if is_nil(linear_client_module) do
@@ -633,6 +643,12 @@ defmodule SymphonyElixir.ExtensionsTest do
         Application.delete_env(:symphony_elixir, :pitchai_pm_fake_collapsed_groups)
       else
         Application.put_env(:symphony_elixir, :pitchai_pm_fake_collapsed_groups, pitchai_pm_fake_collapsed_groups)
+      end
+
+      if is_nil(pitchai_pm_fake_column_sorts) do
+        Application.delete_env(:symphony_elixir, :pitchai_pm_fake_column_sorts)
+      else
+        Application.put_env(:symphony_elixir, :pitchai_pm_fake_column_sorts, pitchai_pm_fake_column_sorts)
       end
     end)
 
@@ -1064,6 +1080,7 @@ defmodule SymphonyElixir.ExtensionsTest do
     assert html =~ "clearTextSelection"
     assert html =~ "activateIntakeDoneShortcut"
     assert html =~ "restoreIntakeDoneShortcut"
+    assert html =~ "toggleIssueGroupImmediately"
     assert html =~ "/vendor/phoenix_html/phoenix_html.js"
     assert html =~ "/vendor/phoenix/phoenix.js"
     assert html =~ "/vendor/phoenix_live_view/phoenix_live_view.js"
@@ -1082,6 +1099,7 @@ defmodule SymphonyElixir.ExtensionsTest do
     assert dashboard_css =~ ".dependency-badge"
     assert dashboard_css =~ ".group-chevron"
     assert dashboard_css =~ ".issue-group-count"
+    assert dashboard_css =~ ".issue-group.is-client-collapsed"
     assert dashboard_css =~ ".column-sort-menu"
     assert dashboard_css =~ ".column-sort-option"
     assert dashboard_css =~ ".detail-merge-action"
@@ -1223,26 +1241,35 @@ defmodule SymphonyElixir.ExtensionsTest do
     assert done_sort_html =~ "Recently updated"
     assert html_index(done_sort_html, "Newest completed ticket") < html_index(done_sort_html, "Older completed ticket")
 
+    Application.put_env(:symphony_elixir, :pitchai_pm_test_recipient, self())
+    flush_snapshot_requests()
+
     updated_sort_html =
       render_click(view, "set_column_sort", %{"state_name" => "Done", "sort_key" => "updated_desc"})
 
     assert html_index(updated_sort_html, "Older completed ticket") < html_index(updated_sort_html, "Newest completed ticket")
+    assert_receive {:pitchai_pm_set_board_column_sort, "Done", "updated_desc"}
+    refute_receive :snapshot_requested, 50
 
     progress_sort_html = render_click(view, "toggle_column_sort_menu", %{"state_name" => "In Progress"})
     assert progress_sort_html =~ "Board order"
     assert progress_sort_html =~ "Priority"
     assert progress_sort_html =~ "Title"
 
-    Application.put_env(:symphony_elixir, :pitchai_pm_test_recipient, self())
+    flush_snapshot_requests()
 
-    render_click(view, "toggle_issue_group", %{
-      "group_by" => "project",
-      "column_state_name" => "Suggested",
-      "group_key" => "project:project-pm",
-      "collapsed" => "true"
-    })
+    collapsed_html =
+      render_click(view, "toggle_issue_group", %{
+        "group_by" => "project",
+        "column_state_name" => "Suggested",
+        "group_key" => "project:project-pm",
+        "collapsed" => "true"
+      })
 
     assert_receive {:pitchai_pm_set_board_group_collapsed, "project", "Suggested", "project:project-pm", true}
+    refute_receive :snapshot_requested, 50
+    assert collapsed_html =~ "issue-group is-collapsed"
+    refute collapsed_html =~ "Summarize feedback from Slack"
 
     create_modal = render_click(view, "open_create_task", %{"state_name" => "Todo"})
     assert create_modal =~ "New ticket"
@@ -1453,6 +1480,30 @@ defmodule SymphonyElixir.ExtensionsTest do
     assert html =~ "aria-expanded=\"false\""
     assert html =~ "issue-group-count"
     refute html =~ "Upgrade to latest React version"
+  end
+
+  test "kanban board applies persisted column sort preferences" do
+    orchestrator_name = Module.concat(__MODULE__, :ColumnSortBoardOrchestrator)
+    Application.put_env(:symphony_elixir, :pitchai_pm_client_module, FakePitchAIPMClient)
+    Application.put_env(:symphony_elixir, :pitchai_pm_fake_column_sorts, %{"done" => "updated_desc"})
+
+    write_workflow_file!(Workflow.workflow_file_path(),
+      tracker_kind: "pitchai_pm",
+      tracker_project_id: "project-pm",
+      tracker_database_url: "postgresql://postgres:postgres@127.0.0.1:5432/test"
+    )
+
+    {:ok, _pid} =
+      StaticOrchestrator.start_link(
+        name: orchestrator_name,
+        snapshot: static_snapshot()
+      )
+
+    start_test_endpoint(orchestrator: orchestrator_name, snapshot_timeout_ms: 50)
+
+    {:ok, _view, html} = live(build_conn(), "/")
+
+    assert html_index(html, "Older completed ticket") < html_index(html, "Newest completed ticket")
   end
 
   test "status liveview renders and refreshes over pubsub" do

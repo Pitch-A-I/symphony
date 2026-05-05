@@ -221,7 +221,8 @@ defmodule SymphonyElixir.PitchAIPM.Client do
            {:ok, state_counts} <- fetch_board_state_counts(project_id, scope_project_ids),
            {:ok, workflow_states} <- fetch_board_workflow_states(project_id),
            {:ok, tasks} <- fetch_board_tasks(project_id, scope_project_ids),
-           {:ok, collapsed_groups} <- fetch_board_collapsed_groups(project_id) do
+           {:ok, collapsed_groups} <- fetch_board_collapsed_groups(project_id),
+           {:ok, column_sorts} <- fetch_board_column_sorts(project_id) do
         columns = build_board_columns(workflow_states, state_counts, tasks)
 
         {:ok,
@@ -230,6 +231,7 @@ defmodule SymphonyElixir.PitchAIPM.Client do
            scope: %{kind: "configured_project_plus_repo_scope_all_tasks", project_ids: scope_project_ids},
            project_options: projects,
            collapsed_groups: collapsed_groups,
+           column_sorts: column_sorts,
            columns: Enum.reject(columns, & &1.hidden?),
            hidden_columns: Enum.filter(columns, & &1.hidden?),
            task_limit_per_column: @board_task_limit_per_state
@@ -384,6 +386,15 @@ defmodule SymphonyElixir.PitchAIPM.Client do
     end
   end
 
+  @spec set_board_column_sort(String.t(), String.t()) :: :ok | {:error, term()}
+  def set_board_column_sort(column_state_name, sort_key) when is_binary(column_state_name) and is_binary(sort_key) do
+    with {:ok, project_id} <- board_project_id(),
+         {:ok, column_state_name} <- required_clean_string(column_state_name, :missing_column_state_name),
+         {:ok, sort_key} <- board_column_sort_key(sort_key) do
+      persist_board_column_sort(project_id, column_state_name, sort_key)
+    end
+  end
+
   @spec set_board_group_collapsed(String.t(), String.t(), String.t(), boolean()) :: :ok | {:error, term()}
   def set_board_group_collapsed(group_by, column_state_name, group_key, collapsed?)
       when is_binary(group_by) and is_binary(column_state_name) and is_binary(group_key) and is_boolean(collapsed?) do
@@ -416,6 +427,16 @@ defmodule SymphonyElixir.PitchAIPM.Client do
     case clean_string(group_by) do
       value when value in ["project", "assignee", "priority"] -> {:ok, value}
       value -> {:error, {:unsupported_board_group_by, value}}
+    end
+  end
+
+  defp board_column_sort_key(sort_key) do
+    case clean_string(sort_key) do
+      value when value in ["board_order", "updated_desc", "created_desc", "priority_asc", "title_asc", "done_time_desc"] ->
+        {:ok, value}
+
+      value ->
+        {:error, {:unsupported_board_column_sort_key, value}}
     end
   end
 
@@ -1836,6 +1857,23 @@ defmodule SymphonyElixir.PitchAIPM.Client do
     end
   end
 
+  defp fetch_board_column_sorts(project_id) do
+    sql = """
+    select column_state_name, sort_key
+    from pitchai_symphony.board_column_sort_preferences
+    where board_project_id = $1::text::uuid
+      and actor = 'global'
+    order by column_state_name
+    """
+
+    with {:ok, result} <- query(sql, [project_id]) do
+      {:ok,
+       result.rows
+       |> Enum.map(fn [column_state_name, sort_key] -> {normalize_state_key(column_state_name), sort_key} end)
+       |> Map.new()}
+    end
+  end
+
   defp persist_board_group_collapsed(project_id, group_by, column_state_name, group_key) do
     sql = """
     insert into pitchai_symphony.board_group_collapse_preferences(
@@ -1874,6 +1912,31 @@ defmodule SymphonyElixir.PitchAIPM.Client do
     """
 
     case query(sql, [project_id, group_by, column_state_name, group_key]) do
+      {:ok, _result} -> :ok
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  defp persist_board_column_sort(project_id, column_state_name, sort_key) do
+    sql = """
+    insert into pitchai_symphony.board_column_sort_preferences(
+      board_project_id,
+      actor,
+      column_state_name,
+      sort_key,
+      metadata
+    )
+    values ($1::text::uuid, 'global', $2::text, $3::text, $4::text::jsonb)
+    on conflict (board_project_id, actor, column_state_name)
+    do update set
+      sort_key = excluded.sort_key,
+      metadata = excluded.metadata,
+      updated_at = now()
+    """
+
+    metadata = Jason.encode!(%{"source" => "symphony_board_live"})
+
+    case query(sql, [project_id, column_state_name, sort_key, metadata]) do
       {:ok, _result} -> :ok
       {:error, reason} -> {:error, reason}
     end

@@ -4,6 +4,7 @@ defmodule SymphonyElixirWeb.BoardLive do
   """
 
   use Phoenix.LiveView, layout: {SymphonyElixirWeb.Layouts, :app}
+  require Logger
 
   alias SymphonyElixirWeb.BoardForecast
   alias SymphonyElixirWeb.{Endpoint, ObservabilityPubSub, Presenter}
@@ -22,7 +23,8 @@ defmodule SymphonyElixirWeb.BoardLive do
       |> assign(:group_by, "project")
       |> assign(:show_hidden_columns, false)
       |> assign(:open_column_sort_menu, nil)
-      |> assign(:column_sorts, %{})
+      |> assign(:column_sorts, payload_column_sorts(payload))
+      |> assign(:collapsed_group_overrides, %{})
       |> assign(:board_reload_generation, 0)
       |> assign(:board_reload_task, nil)
       |> assign(:forecast_state, BoardForecast.new_state())
@@ -136,16 +138,9 @@ defmodule SymphonyElixirWeb.BoardLive do
     if group_by == "none" or is_nil(column_state_name) or is_nil(group_key) do
       {:noreply, put_flash(socket, :error, "Group toggle failed: invalid group")}
     else
-      case Presenter.set_board_group_collapsed(group_by, column_state_name, group_key, collapsed?) do
-        :ok ->
-          {:noreply, reload_board(socket)}
+      persist_board_group_collapsed_async(group_by, column_state_name, group_key, collapsed?)
 
-        {:error, reason} ->
-          {:noreply,
-           socket
-           |> put_flash(:error, "Group toggle failed: #{inspect(reason, pretty: false)}")
-           |> reload_board()}
-      end
+      {:noreply, apply_collapsed_group_override(socket, group_by, column_state_name, group_key, collapsed?)}
     end
   end
 
@@ -171,6 +166,8 @@ defmodule SymphonyElixirWeb.BoardLive do
   @impl true
   def handle_event("set_column_sort", %{"state_name" => state_name, "sort_key" => sort_key}, socket) do
     if column_sort_key_allowed?(state_name, sort_key) do
+      persist_board_column_sort_async(state_name, sort_key)
+
       {:noreply,
        socket
        |> assign(:column_sorts, put_column_sort(socket.assigns.column_sorts, state_name, sort_key))
@@ -427,6 +424,7 @@ defmodule SymphonyElixirWeb.BoardLive do
                 <div
                   :for={group <- grouped_tasks(column_tasks, @group_by, collapsed_group_keys(@payload, @group_by, column.state_name))}
                   class={["issue-group", group.collapsed && "is-collapsed"]}
+                  data-collapsed={to_string(group.collapsed)}
                 >
                   <button
                     :if={group.label}
@@ -439,10 +437,11 @@ defmodule SymphonyElixirWeb.BoardLive do
                     phx-value-collapsed={to_string(!group.collapsed)}
                     aria-expanded={to_string(!group.collapsed)}
                     aria-label={group_toggle_label(group)}
+                    onclick="window.__symphonyToggleIssueGroup && window.__symphonyToggleIssueGroup(this)"
                   >
                     <span class={["group-chevron", group.collapsed && "is-collapsed"]} aria-hidden="true"></span>
                     <span class="issue-group-name"><%= group.label %></span>
-                    <span :if={group.collapsed} class="issue-group-count"><%= length(group.tasks) %></span>
+                    <span class="issue-group-count"><%= length(group.tasks) %></span>
                   </button>
 
                   <article
@@ -813,9 +812,13 @@ defmodule SymphonyElixirWeb.BoardLive do
   end
 
   defp reload_board(socket) do
+    payload =
+      load_payload()
+      |> apply_collapsed_group_overrides(Map.get(socket.assigns, :collapsed_group_overrides, %{}))
+
     socket
     |> bump_board_reload_generation()
-    |> assign(:payload, load_payload())
+    |> assign(:payload, payload)
     |> refresh_forecast()
     |> refresh_selected_task()
   end
@@ -855,6 +858,8 @@ defmodule SymphonyElixirWeb.BoardLive do
 
   defp apply_async_board_payload(socket, generation, payload) do
     if generation == Map.get(socket.assigns, :board_reload_generation, 0) do
+      payload = apply_collapsed_group_overrides(payload, Map.get(socket.assigns, :collapsed_group_overrides, %{}))
+
       socket
       |> assign(:payload, payload)
       |> refresh_forecast()
@@ -882,6 +887,88 @@ defmodule SymphonyElixirWeb.BoardLive do
   defp snapshot_timeout_ms do
     Endpoint.config(:snapshot_timeout_ms) || 15_000
   end
+
+  defp apply_collapsed_group_override(socket, group_by, column_state_name, group_key, collapsed?) do
+    override_key = {group_by, column_state_name, group_key}
+    overrides = Map.put(socket.assigns.collapsed_group_overrides, override_key, collapsed?)
+    payload = apply_collapsed_group_overrides(socket.assigns.payload, overrides)
+
+    socket
+    |> assign(:collapsed_group_overrides, overrides)
+    |> assign(:payload, payload)
+  end
+
+  defp apply_collapsed_group_overrides(payload, overrides) when map_size(overrides) == 0, do: payload
+
+  defp apply_collapsed_group_overrides(%{board: %{collapsed_groups: groups}} = payload, overrides) when is_list(groups) do
+    groups =
+      Enum.reduce(overrides, groups, fn
+        {{group_by, column_state_name, group_key}, true}, acc ->
+          entry = %{group_by: group_by, column_state_name: column_state_name, group_key: group_key}
+
+          if Enum.any?(acc, &same_collapsed_group?(&1, entry)) do
+            acc
+          else
+            [entry | acc]
+          end
+
+        {{group_by, column_state_name, group_key}, false}, acc ->
+          entry = %{group_by: group_by, column_state_name: column_state_name, group_key: group_key}
+          Enum.reject(acc, &same_collapsed_group?(&1, entry))
+      end)
+
+    put_in(payload, [:board, :collapsed_groups], groups)
+  end
+
+  defp apply_collapsed_group_overrides(payload, _overrides), do: payload
+
+  defp same_collapsed_group?(group, entry) do
+    collapsed_group_field(group, :group_by) == entry.group_by and
+      collapsed_group_field(group, :column_state_name) == entry.column_state_name and
+      collapsed_group_field(group, :group_key) == entry.group_key
+  end
+
+  defp collapsed_group_field(group, key) when is_map(group) do
+    Map.get(group, key) || Map.get(group, Atom.to_string(key))
+  end
+
+  defp persist_board_group_collapsed_async(group_by, column_state_name, group_key, collapsed?) do
+    start_preference_task("board group collapse", fn ->
+      Presenter.set_board_group_collapsed(group_by, column_state_name, group_key, collapsed?)
+    end)
+  end
+
+  defp persist_board_column_sort_async(state_name, sort_key) do
+    start_preference_task("board column sort", fn ->
+      Presenter.set_board_column_sort(state_name, sort_key)
+    end)
+  end
+
+  defp start_preference_task(label, fun) when is_function(fun, 0) do
+    case Task.Supervisor.start_child(SymphonyElixir.TaskSupervisor, fn -> log_preference_result(label, fun.()) end) do
+      {:ok, _pid} -> :ok
+      {:error, reason} -> Logger.warning("Failed starting #{label} preference task: #{inspect(reason)}")
+    end
+  end
+
+  defp log_preference_result(_label, :ok), do: :ok
+
+  defp log_preference_result(label, {:error, reason}) do
+    Logger.warning("Failed persisting #{label} preference: #{inspect(reason)}")
+  end
+
+  defp payload_column_sorts(%{board: %{column_sorts: column_sorts}}) when is_map(column_sorts) do
+    column_sorts
+    |> Enum.reduce(%{}, fn {state_name, sort_key}, acc ->
+      if is_binary(sort_key) do
+        Map.put(acc, normalize_state(state_name), sort_key)
+      else
+        acc
+      end
+    end)
+  end
+
+  defp payload_column_sorts(_payload), do: %{}
 
   defp task_detail_path(task_id), do: "/?task_id=#{URI.encode_www_form(task_id)}"
 
