@@ -254,6 +254,124 @@ defmodule Mix.Tasks.Workspace.BeforeRemoveTest do
     )
   end
 
+  test "infers repository from workspace and deletes the remote task branch" do
+    workspace = Path.join(System.tmp_dir!(), "workspace-before-remove-with-pr")
+
+    with_fake_gh_and_git(
+      """
+      #!/bin/sh
+      printf 'gh %s\\n' "$*" >> "$GH_LOG"
+
+      if [ "$1" = "auth" ] && [ "$2" = "status" ]; then
+        exit 0
+      fi
+
+      if [ "$1" = "pr" ] && [ "$2" = "list" ]; then
+        printf '618\\n'
+        exit 0
+      fi
+
+      if [ "$1" = "pr" ] && [ "$2" = "close" ] && [ "$3" = "618" ]; then
+        exit 0
+      fi
+
+      exit 99
+      """,
+      """
+      #!/bin/sh
+      printf 'git %s\\n' "$*" >> "$GH_LOG"
+
+      if [ "$1" = "-C" ]; then
+        shift
+        shift
+      fi
+
+      if [ "$1" = "branch" ] && [ "$2" = "--show-current" ]; then
+        printf 'feature/cancel-me\\n'
+        exit 0
+      fi
+
+      if [ "$1" = "remote" ] && [ "$2" = "get-url" ] && [ "$3" = "origin" ]; then
+        printf 'https://github.com/JoshuaSeth/dft.git\\n'
+        exit 0
+      fi
+
+      if [ "$1" = "ls-remote" ] && [ "$2" = "--exit-code" ]; then
+        exit 0
+      fi
+
+      if [ "$1" = "push" ] && [ "$2" = "origin" ] && [ "$3" = "--delete" ] && [ "$4" = "feature/cancel-me" ]; then
+        exit 0
+      fi
+
+      exit 99
+      """,
+      fn log_path ->
+        {output, error_output} =
+          capture_task_output(fn ->
+            BeforeRemove.run(["--workspace", workspace])
+          end)
+
+        assert output =~ "Closed PR #618 for branch feature/cancel-me"
+        assert output =~ "Deleted remote branch feature/cancel-me"
+        assert error_output == ""
+
+        log = File.read!(log_path)
+        assert log =~ "gh pr list --repo JoshuaSeth/dft --head feature/cancel-me --state open --json number --jq .[].number"
+        assert log =~ "gh pr close 618 --repo JoshuaSeth/dft"
+        assert log =~ "git -C #{workspace} push origin --delete feature/cancel-me"
+      end
+    )
+  end
+
+  test "skips PR and branch cleanup for protected workspace branch" do
+    workspace = Path.join(System.tmp_dir!(), "workspace-before-remove-protected")
+
+    with_fake_gh_and_git(
+      """
+      #!/bin/sh
+      printf 'gh %s\\n' "$*" >> "$GH_LOG"
+      exit 99
+      """,
+      """
+      #!/bin/sh
+      printf 'git %s\\n' "$*" >> "$GH_LOG"
+
+      if [ "$1" = "-C" ]; then
+        shift
+        shift
+      fi
+
+      if [ "$1" = "branch" ] && [ "$2" = "--show-current" ]; then
+        printf 'staging\\n'
+        exit 0
+      fi
+
+      if [ "$1" = "remote" ] && [ "$2" = "get-url" ] && [ "$3" = "origin" ]; then
+        printf 'git@github.com:JoshuaSeth/dft.git\\n'
+        exit 0
+      fi
+
+      exit 99
+      """,
+      fn log_path ->
+        {output, error_output} =
+          capture_task_output(fn ->
+            BeforeRemove.run(["--workspace", workspace])
+          end)
+
+        assert output =~ "Skipping PR cleanup for protected branch staging"
+        assert output =~ "Skipping remote branch cleanup for protected branch staging"
+        assert error_output == ""
+
+        log = File.read!(log_path)
+        refute log =~ "gh auth status"
+        refute log =~ "pr list"
+        refute log =~ "push origin --delete"
+      end
+    )
+  end
+
   defp with_fake_gh(fun) do
     with_fake_binaries(
       %{

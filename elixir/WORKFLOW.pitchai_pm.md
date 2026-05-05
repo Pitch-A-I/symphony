@@ -23,6 +23,9 @@ hooks:
     sh /root/code/pitchai_symphony/elixir/priv/scripts/bootstrap_pitchai_pm_workspace.sh
   before_run: |
     sh /root/code/pitchai_symphony/elixir/priv/scripts/bootstrap_pitchai_pm_workspace.sh
+  before_remove: |
+    cd /root/code/pitchai_symphony/elixir
+    /root/.local/bin/mise exec -- mix workspace.before_remove --workspace "$SYMPHONY_WORKSPACE"
 agent:
   max_concurrent_agents: 20
   max_turns: 6

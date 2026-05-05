@@ -386,6 +386,26 @@ defmodule SymphonyElixir.PitchAIPM.Client do
     end
   end
 
+  @spec cancel_task_pr_links(String.t()) :: :ok | {:error, term()}
+  def cancel_task_pr_links(task_id) when is_binary(task_id) do
+    sql = """
+    update pitchai_symphony.task_pr_links
+    set state = 'cancelled',
+        metadata = metadata || jsonb_build_object(
+          'source', 'kanban_cancel',
+          'cancel_requested_at', to_char(now() at time zone 'utc', 'YYYY-MM-DD"T"HH24:MI:SS"Z"')
+        ),
+        updated_at = now()
+    where task_id = $1::text::uuid
+      and lower(trim(coalesce(state, 'open'))) not in ('closed', 'merged', 'cancelled')
+    """
+
+    case query(sql, [task_id]) do
+      {:ok, _result} -> :ok
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
   @spec set_board_column_sort(String.t(), String.t()) :: :ok | {:error, term()}
   def set_board_column_sort(column_state_name, sort_key) when is_binary(column_state_name) and is_binary(sort_key) do
     with {:ok, project_id} <- board_project_id(),
@@ -530,7 +550,7 @@ defmodule SymphonyElixir.PitchAIPM.Client do
     join pitchai_symphony.task_pr_links pr on pr.task_id = t.id
     left join pitchai_symphony.task_tracking tr on tr.task_id = t.id
     where lower(trim(coalesce(t.state_name, ''))) = 'human review'
-      and lower(trim(coalesce(pr.state, 'open'))) <> 'closed'
+      and lower(trim(coalesce(pr.state, 'open'))) not in ('closed', 'merged', 'cancelled')
     order by pr.updated_at desc, pr.id desc
     limit 100
     """

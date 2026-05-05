@@ -13,15 +13,17 @@ defmodule Mix.Tasks.Workspace.BeforeRemove do
       mix workspace.before_remove
       mix workspace.before_remove --branch feature/my-branch
       mix workspace.before_remove --repo openai/symphony
+      mix workspace.before_remove --workspace /tmp/symphony-workspace
   """
 
   @default_repo "openai/symphony"
+  @protected_branches MapSet.new(["main", "master", "staging", "develop", "development", "trunk", "production", "prod"])
 
   @impl Mix.Task
   def run(args) do
     {opts, _argv, invalid} =
       OptionParser.parse(args,
-        strict: [branch: :string, help: :boolean, repo: :string],
+        strict: [branch: :string, help: :boolean, repo: :string, workspace: :string],
         aliases: [h: :help]
       )
 
@@ -33,20 +35,32 @@ defmodule Mix.Tasks.Workspace.BeforeRemove do
         Mix.raise("Invalid option(s): #{inspect(invalid)}")
 
       true ->
-        repo = opts[:repo] || @default_repo
-        branch = opts[:branch] || current_branch()
+        workspace = opts[:workspace]
+        branch = opts[:branch] || current_branch(workspace)
+        repo = opts[:repo] || github_repo_for_workspace(workspace) || @default_repo
 
         maybe_close_open_pull_requests(repo, branch)
+        maybe_delete_remote_branch(workspace, branch)
     end
   end
 
   defp maybe_close_open_pull_requests(_repo, nil), do: :ok
 
   defp maybe_close_open_pull_requests(repo, branch) do
-    if gh_available?() and gh_authenticated?() do
-      repo
-      |> list_open_pull_request_numbers(branch)
-      |> Enum.each(&close_pull_request(repo, branch, &1))
+    cond do
+      protected_branch?(branch) ->
+        Mix.shell().info("Skipping PR cleanup for protected branch #{branch}")
+
+      unsafe_branch_name?(branch) ->
+        Mix.shell().error("Skipping PR cleanup for unsafe branch name #{inspect(branch)}")
+
+      gh_available?() and gh_authenticated?() ->
+        repo
+        |> list_open_pull_request_numbers(branch)
+        |> Enum.each(&close_pull_request(repo, branch, &1))
+
+      true ->
+        :ok
     end
 
     :ok
@@ -106,14 +120,14 @@ defmodule Mix.Tasks.Workspace.BeforeRemove do
   end
 
   defp closing_comment(branch) do
-    "Closing because the Linear issue for branch #{branch} entered a terminal state without merge."
+    "Closing because the PitchAI PM task for branch #{branch} was cancelled before merge."
   end
 
   defp format_output(""), do: ""
   defp format_output(output), do: " output=#{inspect(output)}"
 
-  defp current_branch do
-    case run_command("git", ["branch", "--show-current"]) do
+  defp current_branch(workspace) do
+    case run_git_command(workspace, ["branch", "--show-current"]) do
       {:ok, output} ->
         case String.trim(output) do
           "" -> nil
@@ -124,6 +138,105 @@ defmodule Mix.Tasks.Workspace.BeforeRemove do
         nil
     end
   end
+
+  defp github_repo_for_workspace(nil), do: nil
+
+  defp github_repo_for_workspace(workspace) do
+    case run_git_command(workspace, ["remote", "get-url", "origin"]) do
+      {:ok, output} -> github_repo_from_remote_url(output)
+      {:error, _reason} -> nil
+    end
+  end
+
+  defp github_repo_from_remote_url(remote_url) when is_binary(remote_url) do
+    remote_url = String.trim(remote_url)
+
+    case Regex.run(~r{github\.com[:/]([^/\s:]+/[^/\s]+?)(?:\.git)?/?$}i, remote_url) do
+      [_match, repo] -> String.replace_suffix(repo, ".git", "")
+      _no_match -> nil
+    end
+  end
+
+  defp maybe_delete_remote_branch(nil, _branch), do: :ok
+  defp maybe_delete_remote_branch(_workspace, nil), do: :ok
+
+  defp maybe_delete_remote_branch(workspace, branch) do
+    cond do
+      protected_branch?(branch) ->
+        Mix.shell().info("Skipping remote branch cleanup for protected branch #{branch}")
+
+      unsafe_branch_name?(branch) ->
+        Mix.shell().error("Skipping remote branch cleanup for unsafe branch name #{inspect(branch)}")
+
+      not git_available?() ->
+        :ok
+
+      true ->
+        delete_remote_branch_if_present(workspace, branch)
+    end
+
+    :ok
+  end
+
+  defp delete_remote_branch_if_present(workspace, branch) do
+    case remote_branch_status(workspace, branch) do
+      :present ->
+        delete_remote_branch(workspace, branch)
+
+      :missing ->
+        :ok
+
+      {:error, {status, output}} ->
+        trimmed_output = String.trim(output)
+
+        Mix.shell().error("Failed to inspect remote branch #{branch}: exit #{status}#{format_output(trimmed_output)}")
+    end
+  end
+
+  defp remote_branch_status(workspace, branch) do
+    case run_git_command(workspace, ["ls-remote", "--exit-code", "--heads", "origin", branch]) do
+      {:ok, _output} -> :present
+      {:error, {2, _output}} -> :missing
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  defp delete_remote_branch(workspace, branch) do
+    case run_git_command(workspace, ["push", "origin", "--delete", branch]) do
+      {:ok, _output} ->
+        Mix.shell().info("Deleted remote branch #{branch}")
+
+      {:error, {status, output}} ->
+        trimmed_output = String.trim(output)
+
+        Mix.shell().error("Failed to delete remote branch #{branch}: exit #{status}#{format_output(trimmed_output)}")
+    end
+  end
+
+  defp git_available? do
+    not is_nil(System.find_executable("git"))
+  end
+
+  defp protected_branch?(branch) when is_binary(branch) do
+    branch
+    |> String.trim()
+    |> String.downcase()
+    |> then(&MapSet.member?(@protected_branches, &1))
+  end
+
+  defp protected_branch?(_branch), do: true
+
+  defp unsafe_branch_name?(branch) when is_binary(branch) do
+    trimmed_branch = String.trim(branch)
+
+    trimmed_branch == "" or String.starts_with?(trimmed_branch, "-") or
+      String.contains?(trimmed_branch, ["\n", "\r", <<0>>, " ", "\t", "..", "@{", "\\", "~", "^", ":", "?", "*", "["])
+  end
+
+  defp unsafe_branch_name?(_branch), do: true
+
+  defp run_git_command(nil, args), do: run_command("git", args)
+  defp run_git_command(workspace, args), do: run_command("git", ["-C", workspace | args])
 
   defp run_command(command, args) do
     case System.find_executable(command) do

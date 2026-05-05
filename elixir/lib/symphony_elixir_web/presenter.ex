@@ -199,8 +199,9 @@ defmodule SymphonyElixirWeb.Presenter do
                  task_id,
                  "Cancelled",
                  Map.put_new(opts, :reason, "kanban_cancel")
-               ) do
-          cancel_orchestrator_issue(orchestrator, task_id, detail.identifier, snapshot_timeout_ms)
+               ),
+             :ok <- cancel_orchestrator_issue(orchestrator, task_id, detail.identifier, snapshot_timeout_ms) do
+          pitchai_pm_client().cancel_task_pr_links(task_id)
         end
 
       other ->

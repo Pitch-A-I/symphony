@@ -82,6 +82,14 @@ defmodule SymphonyElixir.ExtensionsTest do
       :ok
     end
 
+    def cancel_task_pr_links(task_id) do
+      if recipient = Application.get_env(:symphony_elixir, :pitchai_pm_test_recipient) do
+        send(recipient, {:pitchai_pm_cancel_task_pr_links, task_id})
+      end
+
+      :ok
+    end
+
     def board_snapshot do
       {:ok,
        %{
@@ -1373,6 +1381,7 @@ defmodule SymphonyElixir.ExtensionsTest do
     assert_receive {:pitchai_pm_move_issue_on_board, "issue-http", "Cancelled", %{after_task_id: nil, before_task_id: nil, reason: "kanban_drag_cancel"}}
 
     assert_receive {:orchestrator_cancel_issue, "issue-http", "MT-HTTP"}
+    assert_receive {:pitchai_pm_cancel_task_pr_links, "issue-http"}
 
     render_click(view, "move_task_to_todo", %{"task_id" => "issue-blocked"})
 
@@ -1382,6 +1391,7 @@ defmodule SymphonyElixir.ExtensionsTest do
 
     assert_receive {:pitchai_pm_move_issue_on_board, "issue-blocked", "Cancelled", %{reason: "modal_cancel"}}
     assert_receive {:orchestrator_cancel_issue, "issue-blocked", "MT-BLOCK"}
+    assert_receive {:pitchai_pm_cancel_task_pr_links, "issue-blocked"}
 
     render_click(view, "focus_task_card", %{"task_id" => "issue-suggested"})
     assert_push_event(view, "focus-task-card", %{task_id: "issue-suggested"})
