@@ -112,14 +112,7 @@ defmodule SymphonyElixir.PRReviewBridge do
   end
 
   defp normalize_pr_link(link) when is_map(link) do
-    parsed =
-      case {Map.get(link, :repo_full_name), Map.get(link, :pr_number)} do
-        {repo_full_name, pr_number} when is_binary(repo_full_name) and is_integer(pr_number) ->
-          {:ok, %{repo_full_name: repo_full_name, pr_number: pr_number}}
-
-        _missing ->
-          GitHubClient.parse_pr_url(Map.get(link, :url) || "")
-      end
+    parsed = pr_ref_from_link(link)
 
     with {:ok, pr_ref} <- parsed,
          thread_id when is_binary(thread_id) <- clean_string(Map.get(link, :thread_id)),
@@ -133,6 +126,22 @@ defmodule SymphonyElixir.PRReviewBridge do
       {:error, reason} -> {:skip, reason}
       nil -> {:skip, :missing_original_codex_session}
       false -> {:skip, :missing_task_id}
+    end
+  end
+
+  defp pr_ref_from_link(link) do
+    case GitHubClient.parse_pr_url(Map.get(link, :url) || "") do
+      {:ok, pr_ref} ->
+        {:ok, pr_ref}
+
+      {:error, _reason} ->
+        case {Map.get(link, :repo_full_name), Map.get(link, :pr_number)} do
+          {repo_full_name, pr_number} when is_binary(repo_full_name) and is_integer(pr_number) ->
+            {:ok, %{repo_full_name: repo_full_name, pr_number: pr_number}}
+
+          _missing ->
+            {:error, :invalid_github_pr_url}
+        end
     end
   end
 

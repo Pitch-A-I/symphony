@@ -511,13 +511,20 @@ defmodule SymphonyElixir.PitchAIPM.Client do
       coalesce(nullif(trim(pr.branch_name), ''), nullif(trim(tr.branch_name), '')) as branch_name,
       coalesce(nullif(trim(tr.workspace_path), ''), '') as workspace_path,
       (
-        select c.metadata->>'session_id'
-        from pitchai_symphony.task_comments c
-        where c.task_id = t.id
-          and c.kind = 'assistant_final'
-          and nullif(trim(c.metadata->>'session_id'), '') is not null
-        order by c.created_at desc, c.id desc
-        limit 1
+        coalesce(
+          (
+            select c.metadata->>'session_id'
+            from pitchai_symphony.task_comments c
+            where c.task_id = t.id
+              and c.kind = 'assistant_final'
+              and nullif(trim(c.metadata->>'session_id'), '') is not null
+            order by c.created_at desc, c.id desc
+            limit 1
+          ),
+          nullif(trim(tr.metadata->>'pr_review_session_id'), ''),
+          nullif(trim(tr.metadata->>'session_id'), ''),
+          nullif(trim(tr.metadata->>'last_session_id'), '')
+        )
       ) as session_id
     from public.tasks t
     join pitchai_symphony.task_pr_links pr on pr.task_id = t.id

@@ -59,7 +59,9 @@ defmodule SymphonyElixir.PRReviewBridgeTest do
 
     def parse_pr_url(_url), do: {:error, :invalid_github_pr_url}
 
-    def list_pr_comments(_repo_full_name, _pr_number) do
+    def list_pr_comments(repo_full_name, pr_number) do
+      Agent.update(state_agent(), &Map.put(&1, :listed_pr, %{repo_full_name: repo_full_name, pr_number: pr_number}))
+
       {:ok,
        [
          %{
@@ -113,7 +115,7 @@ defmodule SymphonyElixir.PRReviewBridgeTest do
               title: "Review bridge test",
               pr_link_id: 42,
               url: "https://github.com/pitchai/example/pull/12",
-              repo_full_name: "pitchai/example",
+              repo_full_name: "stale/tracking-repo",
               pr_number: 12,
               session_id: "019df465-4e69-77e1-8f01-f91b87c0cb80-019df465-5029-7170-b41d-c629e8cc1a73",
               thread_id: "019df465-4e69-77e1-8f01-f91b87c0cb80",
@@ -176,6 +178,7 @@ defmodule SymphonyElixir.PRReviewBridgeTest do
 
       assert %{
                responded: %{response_id: 7, github_comment_id: "2002"},
+               listed_pr: %{repo_full_name: "pitchai/example", pr_number: 12},
                codex_resume: %{
                  thread_id: "019df465-4e69-77e1-8f01-f91b87c0cb80",
                  workspace: ^workspace,
