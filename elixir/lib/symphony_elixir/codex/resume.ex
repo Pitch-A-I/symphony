@@ -10,34 +10,38 @@ defmodule SymphonyElixir.Codex.Resume do
   @spec run(String.t(), Path.t(), String.t()) :: {:ok, String.t()} | {:error, term()}
   def run(thread_id, workspace, prompt)
       when is_binary(thread_id) and is_binary(workspace) and is_binary(prompt) do
-    output_file = Path.join(System.tmp_dir!(), "symphony-codex-resume-#{System.unique_integer([:positive])}.txt")
+    temp_dir = Path.join(System.tmp_dir!(), "symphony-codex-resume-#{System.unique_integer([:positive])}")
+    output_file = Path.join(temp_dir, "last-message.txt")
+    prompt_file = Path.join(temp_dir, "prompt.txt")
 
     try do
-      do_run(thread_id, workspace, prompt, output_file)
+      with :ok <- prepare_temp_dir(temp_dir),
+           :ok <- write_prompt_file(prompt_file, prompt) do
+        do_run(thread_id, workspace, output_file, prompt_file)
+      end
     after
-      File.rm(output_file)
+      File.rm_rf(temp_dir)
     end
   end
 
-  defp do_run(thread_id, workspace, prompt, output_file) do
+  defp do_run(thread_id, workspace, output_file, prompt_file) do
     task =
       Task.async(fn ->
         System.cmd(
-          "codex",
+          "sh",
           [
-            "exec",
-            "resume",
-            "--all",
-            "--dangerously-bypass-approvals-and-sandbox",
             "-c",
-            "shell_environment_policy.inherit=all",
-            "-o",
+            """
+            exec codex exec resume --all --dangerously-bypass-approvals-and-sandbox \
+            -c shell_environment_policy.inherit=all \
+            -o "$1" "$2" - < "$3"
+            """,
+            "symphony-codex-resume",
             output_file,
             thread_id,
-            "-"
+            prompt_file
           ],
           cd: workspace,
-          input: prompt,
           stderr_to_stdout: true
         )
       end)
@@ -65,6 +69,24 @@ defmodule SymphonyElixir.Codex.Resume do
 
       {:error, reason} ->
         {:error, {:codex_resume_missing_output, reason, trim_output(fallback_output)}}
+    end
+  end
+
+  defp write_prompt_file(prompt_file, prompt) do
+    with :ok <- File.write(prompt_file, prompt),
+         :ok <- File.chmod(prompt_file, 0o600) do
+      :ok
+    else
+      {:error, reason} -> {:error, {:codex_resume_prompt_file_failed, reason}}
+    end
+  end
+
+  defp prepare_temp_dir(temp_dir) do
+    with :ok <- File.mkdir(temp_dir),
+         :ok <- File.chmod(temp_dir, 0o700) do
+      :ok
+    else
+      {:error, reason} -> {:error, {:codex_resume_temp_dir_failed, reason}}
     end
   end
 
