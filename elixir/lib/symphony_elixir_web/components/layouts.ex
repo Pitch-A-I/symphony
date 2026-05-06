@@ -140,7 +140,7 @@ defmodule SymphonyElixirWeb.Layouts do
                 document.body.style.width = "100%";
                 document.body.style.overflow = "hidden";
 
-                var modal = this.el.querySelector(".detail-modal, .create-modal");
+                var modal = this.el.querySelector(".detail-modal, .create-modal, .rework-modal");
                 if (modal) modal.focus({preventScroll: true});
               },
 
@@ -156,7 +156,7 @@ defmodule SymphonyElixirWeb.Layouts do
               },
 
               handleWheel: function (event) {
-                if (!event.target.closest(".detail-modal, .create-modal")) {
+                if (!event.target.closest(".detail-modal, .create-modal, .rework-modal")) {
                   event.preventDefault();
                 }
               },
@@ -171,6 +171,33 @@ defmodule SymphonyElixirWeb.Layouts do
                 window.setTimeout(function () {
                   focusTaskCard(taskId, 0);
                 }, 80);
+              }
+            };
+
+            Hooks.SubmitOnEnter = {
+              mounted: function () {
+                this.handleKeydown = this.handleKeydown.bind(this);
+                this.el.addEventListener("keydown", this.handleKeydown);
+              },
+
+              destroyed: function () {
+                this.el.removeEventListener("keydown", this.handleKeydown);
+              },
+
+              handleKeydown: function (event) {
+                if (event.key !== "Enter") return;
+                if (event.shiftKey || event.ctrlKey || event.metaKey || event.altKey) return;
+
+                var trigger = event.target.closest("[data-submit-on-enter]");
+                if (!trigger || !this.el.contains(trigger)) return;
+
+                event.preventDefault();
+
+                if (this.el.requestSubmit) {
+                  this.el.requestSubmit();
+                } else {
+                  this.el.dispatchEvent(new Event("submit", {bubbles: true, cancelable: true}));
+                }
               }
             };
 
@@ -315,7 +342,7 @@ defmodule SymphonyElixirWeb.Layouts do
                 document.body.classList.add("is-kanban-dragging");
 
                 this.activateIntakeDoneShortcut(this.drag.originState);
-                this.activateMergingReworkShortcut(this.drag.originState);
+                this.activateHumanReviewReworkShortcut(this.drag.originState);
                 this.clearTextSelection();
                 this.moveCard(event);
                 this.updateDropTarget(event);
@@ -360,6 +387,7 @@ defmodule SymphonyElixirWeb.Layouts do
                   this.placeCardAtDropTarget();
                   this.pushEvent("move_task", {
                     task_id: drag.taskId,
+                    origin_state: drag.originState || "",
                     target_state: dropState,
                     before_task_id: beforeTaskId || "",
                     after_task_id: afterTaskId || ""
@@ -595,30 +623,30 @@ defmodule SymphonyElixirWeb.Layouts do
                 this.ensureIntakeDoneShortcut(true);
               },
 
-              activateMergingReworkShortcut: function (originState) {
-                if (!this.sameBoardState(originState, "merging") || this.columnShortcut) return;
+              activateHumanReviewReworkShortcut: function (originState) {
+                if (!this.sameBoardState(originState, "human review") || this.columnShortcut) return;
 
                 var parent = this.boardColumnsContainer();
                 if (!parent) return;
 
-                var mergingColumn = this.findColumnByState(parent, "Merging");
+                var todoColumn = this.findColumnByState(parent, "Todo");
                 var reworkColumn = this.findColumnByState(parent, "Rework");
-                if (!mergingColumn || !reworkColumn || mergingColumn === reworkColumn) return;
+                if (!todoColumn || !reworkColumn || todoColumn === reworkColumn) return;
 
                 this.columnShortcut = {
-                  mode: "merging-rework",
+                  mode: "human-review-rework",
                   originalStates: this.columnStates(parent)
                 };
 
-                this.el.classList.add("is-merging-rework-shortcut");
-                this.ensureMergingReworkShortcut(true);
+                this.el.classList.add("is-human-review-rework-shortcut");
+                this.ensureHumanReviewReworkShortcut(true);
               },
 
               ensureActiveColumnShortcut: function () {
                 if (!this.columnShortcut) return;
 
-                if (this.columnShortcut.mode === "merging-rework") {
-                  this.ensureMergingReworkShortcut();
+                if (this.columnShortcut.mode === "human-review-rework") {
+                  this.ensureHumanReviewReworkShortcut();
                 } else {
                   this.ensureIntakeDoneShortcut();
                 }
@@ -657,23 +685,23 @@ defmodule SymphonyElixirWeb.Layouts do
                 }.bind(this));
               },
 
-              ensureMergingReworkShortcut: function (animate) {
-                if (!this.columnShortcut || this.columnShortcut.mode !== "merging-rework") return;
+              ensureHumanReviewReworkShortcut: function (animate) {
+                if (!this.columnShortcut || this.columnShortcut.mode !== "human-review-rework") return;
 
                 var parent = this.boardColumnsContainer();
                 if (!parent) return;
 
-                var mergingColumn = this.findColumnByState(parent, "Merging");
+                var todoColumn = this.findColumnByState(parent, "Todo");
                 var reworkColumn = this.findColumnByState(parent, "Rework");
-                if (!mergingColumn || !reworkColumn || mergingColumn === reworkColumn) return;
+                if (!todoColumn || !reworkColumn || todoColumn === reworkColumn) return;
 
-                mergingColumn.classList.add("is-shortcut-anchor");
+                todoColumn.classList.add("is-shortcut-swapped-out");
                 reworkColumn.classList.add("is-rework-shortcut-active");
 
-                if (reworkColumn.previousElementSibling === mergingColumn) return;
+                if (reworkColumn.previousElementSibling === todoColumn || reworkColumn.nextElementSibling === todoColumn) return;
 
                 this.withColumnAnimation(parent, Boolean(animate), function () {
-                  parent.insertBefore(reworkColumn, mergingColumn.nextSibling);
+                  parent.insertBefore(reworkColumn, todoColumn);
                 });
               },
 
@@ -684,7 +712,7 @@ defmodule SymphonyElixirWeb.Layouts do
                 var parent = this.boardColumnsContainer();
                 this.columnShortcut = null;
                 this.el.classList.remove("is-suggested-done-shortcut");
-                this.el.classList.remove("is-merging-rework-shortcut");
+                this.el.classList.remove("is-human-review-rework-shortcut");
 
                 if (!parent) return;
 

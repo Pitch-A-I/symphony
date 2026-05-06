@@ -20,6 +20,7 @@ defmodule SymphonyElixirWeb.BoardLive do
       |> assign(:payload, payload)
       |> assign(:selected_task, nil)
       |> assign(:create_task_form, nil)
+      |> assign(:rework_task_form, nil)
       |> assign(:group_by, "project")
       |> assign(:show_hidden_columns, false)
       |> assign(:open_column_sort_menu, nil)
@@ -185,22 +186,20 @@ defmodule SymphonyElixirWeb.BoardLive do
         after_task_id: optional_param(params, "after_task_id")
       }
 
-      move_result =
-        if cancel_state?(target_state) do
-          Presenter.cancel_board_task(task_id, orchestrator(), snapshot_timeout_ms(), Map.put(opts, :reason, "kanban_drag_cancel"))
-        else
-          Presenter.move_board_task(task_id, target_state, opts)
-        end
+      cond do
+        rework_state?(target_state) ->
+          form = new_rework_task_form(socket.assigns.payload, task_id, optional_param(params, "origin_state"), opts)
+          {:noreply, assign(socket, :rework_task_form, form)}
 
-      case move_result do
-        :ok ->
-          {:noreply, reload_board(socket)}
+        cancel_state?(target_state) ->
+          move_result =
+            Presenter.cancel_board_task(task_id, orchestrator(), snapshot_timeout_ms(), Map.put(opts, :reason, "kanban_drag_cancel"))
 
-        {:error, reason} ->
-          {:noreply,
-           socket
-           |> put_flash(:error, "Move failed: #{inspect(reason, pretty: false)}")
-           |> reload_board()}
+          handle_move_result(socket, move_result, "Move failed")
+
+        true ->
+          move_result = Presenter.move_board_task(task_id, target_state, opts)
+          handle_move_result(socket, move_result, "Move failed")
       end
     else
       {:noreply, put_flash(socket, :error, "Move failed: unsupported target state")}
@@ -220,6 +219,40 @@ defmodule SymphonyElixirWeb.BoardLive do
          socket
          |> put_flash(:error, "Cancel failed: #{inspect(reason, pretty: false)}")
          |> reload_board()}
+    end
+  end
+
+  @impl true
+  def handle_event("close_rework_task", _params, socket) do
+    {:noreply, assign(socket, :rework_task_form, nil)}
+  end
+
+  @impl true
+  def handle_event("submit_rework_task", %{"rework" => raw_form}, socket) do
+    case validate_rework_task_form(raw_form, socket.assigns[:rework_task_form]) do
+      {:ok, request} ->
+        opts =
+          request.position_opts
+          |> Map.put(:reason, "kanban_rework_request")
+
+        case Presenter.rework_board_task(request.task_id, request.prompt, opts) do
+          :ok ->
+            {:noreply,
+             socket
+             |> assign(:rework_task_form, nil)
+             |> reload_board()}
+
+          {:error, reason} ->
+            form =
+              rework_task_form_with_errors(raw_form, socket.assigns[:rework_task_form], %{
+                form: rework_error(reason)
+              })
+
+            {:noreply, assign(socket, :rework_task_form, form)}
+        end
+
+      {:error, form} ->
+        {:noreply, assign(socket, :rework_task_form, form)}
     end
   end
 
@@ -534,8 +567,46 @@ defmodule SymphonyElixirWeb.BoardLive do
 
         <.task_detail_modal :if={@selected_task} task={@selected_task} />
         <.create_task_modal :if={@create_task_form} form={@create_task_form} payload={@payload} />
+        <.rework_task_modal :if={@rework_task_form} form={@rework_task_form} />
       <% end %>
     </section>
+    """
+  end
+
+  defp rework_task_modal(assigns) do
+    ~H"""
+    <div id="rework-task-backdrop" class="detail-backdrop rework-backdrop" role="presentation" phx-hook="ModalScrollLock">
+      <section class="rework-modal" role="dialog" aria-modal="true" aria-labelledby="rework-ticket-title" tabindex="-1">
+        <header class="rework-header">
+          <div>
+            <span><%= @form.identifier %></span>
+            <h2 id="rework-ticket-title">Request rework</h2>
+          </div>
+          <button type="button" phx-click="close_rework_task" aria-label="Close rework form">x</button>
+        </header>
+
+        <p class="rework-ticket-title"><%= @form.title %></p>
+
+        <form id="rework-ticket-form" class="rework-form" phx-submit="submit_rework_task" phx-hook="SubmitOnEnter">
+          <input type="hidden" name="rework[task_id]" value={@form.task_id} />
+          <input type="hidden" name="rework[before_task_id]" value={@form.before_task_id || ""} />
+          <input type="hidden" name="rework[after_task_id]" value={@form.after_task_id || ""} />
+
+          <label>
+            <span>Follow-up prompt</span>
+            <textarea name="rework[prompt]" required rows="5" data-submit-on-enter><%= @form.prompt %></textarea>
+            <small :if={@form.errors[:prompt]}><%= @form.errors.prompt %></small>
+          </label>
+
+          <small :if={@form.errors[:form]} class="create-form-error"><%= @form.errors.form %></small>
+
+          <div class="rework-actions">
+            <button type="button" class="create-secondary" phx-click="close_rework_task">Cancel</button>
+            <button type="submit" class="create-primary">Send to Rework</button>
+          </div>
+        </form>
+      </section>
+    </div>
     """
   end
 
@@ -824,6 +895,15 @@ defmodule SymphonyElixirWeb.BoardLive do
     |> refresh_selected_task()
   end
 
+  defp handle_move_result(socket, :ok, _label), do: {:noreply, reload_board(socket)}
+
+  defp handle_move_result(socket, {:error, reason}, label) do
+    {:noreply,
+     socket
+     |> put_flash(:error, "#{label}: #{inspect(reason, pretty: false)}")
+     |> reload_board()}
+  end
+
   defp refresh_selected_task(%{assigns: %{selected_task: %{id: task_id}}} = socket) when is_binary(task_id) do
     case Presenter.board_task_detail(task_id, current_runtime(socket)) do
       {:ok, detail} -> assign(socket, :selected_task, detail)
@@ -1061,6 +1141,79 @@ defmodule SymphonyElixirWeb.BoardLive do
       errors: %{}
     }
   end
+
+  defp new_rework_task_form(payload, task_id, origin_state, opts) do
+    task = find_payload_task(payload, task_id)
+
+    %{
+      task_id: task_id,
+      identifier: rework_task_identifier(task, task_id),
+      title: rework_task_title(task, task_id),
+      origin_state: normalize_optional_string(origin_state),
+      before_task_id: Map.get(opts, :before_task_id),
+      after_task_id: Map.get(opts, :after_task_id),
+      prompt: "",
+      errors: %{}
+    }
+  end
+
+  defp rework_task_form_with_errors(raw_form, existing_form, errors) do
+    existing_form = existing_form || %{}
+    task_id = string_value(raw_form, "task_id")
+
+    %{
+      task_id: task_id,
+      identifier: Map.get(existing_form, :identifier) || short_task_identifier(task_id),
+      title: Map.get(existing_form, :title) || "Selected ticket",
+      origin_state: Map.get(existing_form, :origin_state),
+      before_task_id: optional_param(raw_form, "before_task_id"),
+      after_task_id: optional_param(raw_form, "after_task_id"),
+      prompt: string_value(raw_form, "prompt"),
+      errors: errors
+    }
+  end
+
+  defp validate_rework_task_form(form, existing_form) when is_map(form) do
+    errors =
+      %{}
+      |> require_nonempty(form, "task_id", :task_id, "Task is required.")
+      |> require_nonempty(form, "prompt", :prompt, "Follow-up prompt is required.")
+
+    if errors == %{} do
+      {:ok,
+       %{
+         task_id: string_value(form, "task_id"),
+         prompt: string_value(form, "prompt"),
+         position_opts: %{
+           before_task_id: optional_param(form, "before_task_id"),
+           after_task_id: optional_param(form, "after_task_id")
+         }
+       }}
+    else
+      {:error, rework_task_form_with_errors(form, existing_form, errors)}
+    end
+  end
+
+  defp rework_error(reason), do: "Rework failed: #{inspect(reason, pretty: false)}"
+
+  defp find_payload_task(%{board: board}, task_id) when is_map(board) do
+    board
+    |> board_all_columns()
+    |> Enum.flat_map(&Map.get(&1, :tasks, []))
+    |> Enum.find(&(Map.get(&1, :id) == task_id))
+  end
+
+  defp find_payload_task(_payload, _task_id), do: nil
+
+  defp board_all_columns(board) do
+    Map.get(board, :columns, []) ++ Map.get(board, :hidden_columns, [])
+  end
+
+  defp rework_task_identifier(%{identifier: identifier}, _task_id) when is_binary(identifier), do: identifier
+  defp rework_task_identifier(_task, task_id), do: short_task_identifier(task_id)
+
+  defp rework_task_title(%{title: title}, _task_id) when is_binary(title), do: title
+  defp rework_task_title(_task, _task_id), do: "Selected ticket"
 
   defp create_task_form_with_errors(form, errors) do
     %{
@@ -1523,6 +1676,7 @@ defmodule SymphonyElixirWeb.BoardLive do
   defp selected_task_cancel_reason(_task), do: "modal_cancel"
 
   defp cancel_state?(state_name), do: normalize_state(state_name) == "cancelled"
+  defp rework_state?(state_name), do: normalize_state(state_name) == "rework"
 
   defp terminal_task_states, do: ["done", "cancelled", "canceled", "duplicate"]
 

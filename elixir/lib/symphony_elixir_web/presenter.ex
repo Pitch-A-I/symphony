@@ -188,6 +188,21 @@ defmodule SymphonyElixirWeb.Presenter do
     end
   end
 
+  @spec rework_board_task(String.t(), String.t(), map()) :: :ok | {:error, term()}
+  def rework_board_task(task_id, prompt, opts \\ %{})
+      when is_binary(task_id) and is_binary(prompt) and is_map(opts) do
+    case Config.settings!().tracker.kind do
+      "pitchai_pm" ->
+        with {:ok, clean_prompt} <- required_rework_prompt(prompt),
+             :ok <- pitchai_pm_client().create_comment(task_id, rework_comment_body(clean_prompt)) do
+          pitchai_pm_client().move_issue_on_board(task_id, "Rework", Map.put_new(opts, :reason, "kanban_rework_request"))
+        end
+
+      other ->
+        {:error, {:unsupported_board_tracker, other}}
+    end
+  end
+
   @spec cancel_board_task(String.t(), GenServer.name(), timeout(), map()) :: :ok | {:error, term()}
   def cancel_board_task(task_id, orchestrator, snapshot_timeout_ms, opts \\ %{})
       when is_binary(task_id) and is_map(opts) do
@@ -215,6 +230,15 @@ defmodule SymphonyElixirWeb.Presenter do
       other -> {:error, {:orchestrator_cancel_failed, other}}
     end
   end
+
+  defp required_rework_prompt(prompt) do
+    case String.trim(prompt) do
+      "" -> {:error, :missing_rework_prompt}
+      clean_prompt -> {:ok, clean_prompt}
+    end
+  end
+
+  defp rework_comment_body(prompt), do: "Rework request:\n\n#{prompt}"
 
   @spec set_board_group_collapsed(String.t(), String.t(), String.t(), boolean()) :: :ok | {:error, term()}
   def set_board_group_collapsed(group_by, column_state_name, group_key, collapsed?)

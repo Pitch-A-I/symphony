@@ -82,6 +82,14 @@ defmodule SymphonyElixir.ExtensionsTest do
       :ok
     end
 
+    def create_comment(task_id, body) do
+      if recipient = Application.get_env(:symphony_elixir, :pitchai_pm_test_recipient) do
+        send(recipient, {:pitchai_pm_create_comment, task_id, body})
+      end
+
+      :ok
+    end
+
     def cancel_task_pr_links(task_id) do
       if recipient = Application.get_env(:symphony_elixir, :pitchai_pm_test_recipient) do
         send(recipient, {:pitchai_pm_cancel_task_pr_links, task_id})
@@ -1088,7 +1096,8 @@ defmodule SymphonyElixir.ExtensionsTest do
     assert html =~ "clearTextSelection"
     assert html =~ "activateIntakeDoneShortcut"
     assert html =~ "restoreColumnShortcut"
-    assert html =~ "activateMergingReworkShortcut"
+    assert html =~ "activateHumanReviewReworkShortcut"
+    assert html =~ "Hooks.SubmitOnEnter"
     assert html =~ "toggleIssueGroupImmediately"
     assert html =~ "/vendor/phoenix_html/phoenix_html.js"
     assert html =~ "/vendor/phoenix/phoenix.js"
@@ -1117,8 +1126,9 @@ defmodule SymphonyElixir.ExtensionsTest do
     assert dashboard_css =~ ".drag-placeholder"
     assert dashboard_css =~ "body.is-kanban-drag-pending"
     assert dashboard_css =~ ".board-workspace.is-suggested-done-shortcut"
-    assert dashboard_css =~ ".board-workspace.is-merging-rework-shortcut"
+    assert dashboard_css =~ ".board-workspace.is-human-review-rework-shortcut"
     assert dashboard_css =~ "[data-shortcut-column=\"rework\"]"
+    assert dashboard_css =~ ".rework-modal"
     assert dashboard_css =~ ".kanban-column.is-done-shortcut"
     assert dashboard_css =~ "-webkit-user-select: none !important"
     assert dashboard_css =~ ".is-drag-origin-card"
@@ -1379,6 +1389,48 @@ defmodule SymphonyElixir.ExtensionsTest do
     render_hook(view, "move_task", %{"task_id" => "issue-todo", "target_state" => "Human Review"})
 
     assert_receive {:pitchai_pm_move_issue_on_board, "issue-todo", "Human Review", %{after_task_id: nil, before_task_id: nil, reason: "kanban_drag_drop"}}
+
+    rework_modal =
+      render_hook(view, "move_task", %{
+        "task_id" => "issue-human-review",
+        "origin_state" => "Human Review",
+        "target_state" => "Rework",
+        "before_task_id" => "",
+        "after_task_id" => ""
+      })
+
+    assert rework_modal =~ "Request rework"
+    assert rework_modal =~ "Follow-up prompt"
+    assert rework_modal =~ "data-submit-on-enter"
+    refute_receive {:pitchai_pm_move_issue_on_board, "issue-human-review", "Rework", _opts}, 50
+
+    invalid_rework =
+      render_submit(view, "submit_rework_task", %{
+        "rework" => %{
+          "task_id" => "issue-human-review",
+          "prompt" => "",
+          "before_task_id" => "",
+          "after_task_id" => ""
+        }
+      })
+
+    assert invalid_rework =~ "Follow-up prompt is required."
+
+    submitted_rework =
+      render_submit(view, "submit_rework_task", %{
+        "rework" => %{
+          "task_id" => "issue-human-review",
+          "prompt" => "Please tighten the empty-state copy before merging.",
+          "before_task_id" => "",
+          "after_task_id" => ""
+        }
+      })
+
+    assert_receive {:pitchai_pm_create_comment, "issue-human-review", "Rework request:\n\nPlease tighten the empty-state copy before merging."}
+
+    assert_receive {:pitchai_pm_move_issue_on_board, "issue-human-review", "Rework", %{after_task_id: nil, before_task_id: nil, reason: "kanban_rework_request"}}
+
+    refute submitted_rework =~ "rework-task-backdrop"
 
     render_hook(view, "move_task", %{"task_id" => "issue-http", "target_state" => "Cancelled"})
 

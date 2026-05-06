@@ -296,15 +296,15 @@ button {
   display: none;
 }
 
-.board-workspace.is-merging-rework-shortcut .kanban-column[data-shortcut-column="rework"] {
+.board-workspace.is-human-review-rework-shortcut .kanban-column[data-shortcut-column="rework"] {
   display: block;
   border-right-color: rgba(220, 38, 38, 0.34);
   background: linear-gradient(180deg, rgba(220, 38, 38, 0.1), rgba(220, 38, 38, 0.02));
   box-shadow: inset 0 0 0 1px rgba(220, 38, 38, 0.15);
 }
 
-.board-workspace.is-merging-rework-shortcut .kanban-column.is-shortcut-anchor {
-  border-right-color: rgba(5, 150, 105, 0.28);
+.board-workspace.is-human-review-rework-shortcut .kanban-column.is-shortcut-swapped-out {
+  display: none;
 }
 
 .column-header {
@@ -768,11 +768,13 @@ body.is-kanban-dragging * {
   font-size: 0.86rem;
 }
 
-.create-backdrop {
+.create-backdrop,
+.rework-backdrop {
   z-index: 90;
 }
 
-.create-modal {
+.create-modal,
+.rework-modal {
   width: min(35rem, calc(100vw - 2rem));
   height: fit-content;
   max-height: min(38rem, calc(100vh - 2rem));
@@ -783,7 +785,8 @@ body.is-kanban-dragging * {
   box-shadow: 0 24px 60px rgba(23, 25, 31, 0.22);
 }
 
-.create-header {
+.create-header,
+.rework-header {
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -792,7 +795,8 @@ body.is-kanban-dragging * {
   border-bottom: 1px solid var(--board-border);
 }
 
-.create-header h2 {
+.create-header h2,
+.rework-header h2 {
   margin: 0;
   color: #202229;
   font-size: 1rem;
@@ -800,7 +804,20 @@ body.is-kanban-dragging * {
   letter-spacing: 0;
 }
 
-.create-header button {
+.rework-header > div {
+  display: grid;
+  gap: 0.15rem;
+  min-width: 0;
+}
+
+.rework-header span {
+  color: #6b7280;
+  font-size: 0.68rem;
+  font-weight: 720;
+}
+
+.create-header button,
+.rework-header button {
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -815,12 +832,23 @@ body.is-kanban-dragging * {
 }
 
 .create-header button:hover,
+.rework-header button:hover,
 .create-secondary:hover {
   border-color: var(--board-border);
   background: var(--board-surface-soft);
 }
 
-.create-form {
+.rework-ticket-title {
+  margin: 0;
+  padding: 0.7rem 1.05rem 0;
+  color: #2f333c;
+  font-size: 0.84rem;
+  font-weight: 700;
+  line-height: 1.3;
+}
+
+.create-form,
+.rework-form {
   display: flex;
   flex-direction: column;
   gap: 0.72rem;
@@ -833,14 +861,16 @@ body.is-kanban-dragging * {
   gap: 0.62rem;
 }
 
-.create-form label {
+.create-form label,
+.rework-form label {
   display: flex;
   flex-direction: column;
   gap: 0.26rem;
   min-width: 0;
 }
 
-.create-form label > span {
+.create-form label > span,
+.rework-form label > span {
   color: #4b5563;
   font-size: 0.73rem;
   font-weight: 720;
@@ -848,7 +878,8 @@ body.is-kanban-dragging * {
 
 .create-form input,
 .create-form select,
-.create-form textarea {
+.create-form textarea,
+.rework-form textarea {
   width: 100%;
   min-height: 2.05rem;
   border: 1px solid var(--board-border);
@@ -864,7 +895,8 @@ body.is-kanban-dragging * {
   padding: 0.4rem 0.5rem;
 }
 
-.create-form textarea {
+.create-form textarea,
+.rework-form textarea {
   min-height: 7rem;
   resize: vertical;
   padding: 0.48rem 0.52rem;
@@ -873,13 +905,15 @@ body.is-kanban-dragging * {
 
 .create-form input:focus,
 .create-form select:focus,
-.create-form textarea:focus {
+.create-form textarea:focus,
+.rework-form textarea:focus {
   border-color: #9aa8c7;
   box-shadow: 0 0 0 3px rgba(66, 99, 235, 0.1);
   outline: none;
 }
 
-.create-form small {
+.create-form small,
+.rework-form small {
   color: #a83255;
   font-size: 0.68rem;
   font-weight: 650;
@@ -892,7 +926,8 @@ body.is-kanban-dragging * {
   background: #fff5f7;
 }
 
-.create-actions {
+.create-actions,
+.rework-actions {
   display: flex;
   justify-content: flex-end;
   gap: 0.42rem;
