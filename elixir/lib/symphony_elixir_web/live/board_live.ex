@@ -28,6 +28,7 @@ defmodule SymphonyElixirWeb.BoardLive do
       |> assign(:collapsed_group_overrides, %{})
       |> assign(:board_reload_generation, 0)
       |> assign(:board_reload_task, nil)
+      |> assign(:board_mutation_tasks, %{})
       |> assign(:forecast_state, BoardForecast.new_state())
       |> refresh_forecast()
 
@@ -103,21 +104,15 @@ defmodule SymphonyElixirWeb.BoardLive do
   def handle_event("create_task", %{"task" => raw_form}, socket) do
     case validate_create_task_form(raw_form, socket.assigns.payload) do
       {:ok, params} ->
-        case Presenter.create_board_task(params, orchestrator(), snapshot_timeout_ms()) do
-          {:ok, detail} ->
-            socket =
-              socket
-              |> assign(:create_task_form, nil)
-              |> reload_board()
-              |> assign(:selected_task, detail)
+        orchestrator = orchestrator()
+        timeout = snapshot_timeout_ms()
 
-            {:noreply, socket}
-
-          {:error, reason} ->
-            form = create_task_form_with_errors(raw_form, %{form: create_error(reason)})
-
-            {:noreply, assign(socket, :create_task_form, form)}
-        end
+        {:noreply,
+         socket
+         |> assign(:create_task_form, nil)
+         |> start_board_mutation("Create failed", fn ->
+           Presenter.create_board_task(params, orchestrator, timeout)
+         end)}
 
       {:error, form} ->
         {:noreply, assign(socket, :create_task_form, form)}
@@ -192,14 +187,19 @@ defmodule SymphonyElixirWeb.BoardLive do
           {:noreply, assign(socket, :rework_task_form, form)}
 
         cancel_state?(target_state) ->
-          move_result =
-            Presenter.cancel_board_task(task_id, orchestrator(), snapshot_timeout_ms(), Map.put(opts, :reason, "kanban_drag_cancel"))
+          orchestrator = orchestrator()
+          timeout = snapshot_timeout_ms()
 
-          handle_move_result(socket, move_result, "Move failed")
+          {:noreply,
+           start_board_mutation(socket, "Move failed", fn ->
+             Presenter.cancel_board_task(task_id, orchestrator, timeout, Map.put(opts, :reason, "kanban_drag_cancel"))
+           end)}
 
         true ->
-          move_result = Presenter.move_board_task(task_id, target_state, opts)
-          handle_move_result(socket, move_result, "Move failed")
+          {:noreply,
+           start_board_mutation(socket, "Move failed", fn ->
+             Presenter.move_board_task(task_id, target_state, opts)
+           end)}
       end
     else
       {:noreply, put_flash(socket, :error, "Move failed: unsupported target state")}
@@ -209,17 +209,15 @@ defmodule SymphonyElixirWeb.BoardLive do
   @impl true
   def handle_event("cancel_task", %{"task_id" => task_id}, socket) do
     reason = selected_task_cancel_reason(socket.assigns[:selected_task])
+    orchestrator = orchestrator()
+    timeout = snapshot_timeout_ms()
 
-    case Presenter.cancel_board_task(task_id, orchestrator(), snapshot_timeout_ms(), %{reason: reason}) do
-      :ok ->
-        {:noreply, reload_board(socket)}
-
-      {:error, reason} ->
-        {:noreply,
-         socket
-         |> put_flash(:error, "Cancel failed: #{inspect(reason, pretty: false)}")
-         |> reload_board()}
-    end
+    {:noreply,
+     socket
+     |> close_task_modal()
+     |> start_board_mutation("Cancel failed", fn ->
+       Presenter.cancel_board_task(task_id, orchestrator, timeout, %{reason: reason})
+     end)}
   end
 
   @impl true
@@ -235,21 +233,12 @@ defmodule SymphonyElixirWeb.BoardLive do
           request.position_opts
           |> Map.put(:reason, "kanban_rework_request")
 
-        case Presenter.rework_board_task(request.task_id, request.prompt, opts) do
-          :ok ->
-            {:noreply,
-             socket
-             |> assign(:rework_task_form, nil)
-             |> reload_board()}
-
-          {:error, reason} ->
-            form =
-              rework_task_form_with_errors(raw_form, socket.assigns[:rework_task_form], %{
-                form: rework_error(reason)
-              })
-
-            {:noreply, assign(socket, :rework_task_form, form)}
-        end
+        {:noreply,
+         socket
+         |> assign(:rework_task_form, nil)
+         |> start_board_mutation("Rework failed", fn ->
+           Presenter.rework_board_task(request.task_id, request.prompt, opts)
+         end)}
 
       {:error, form} ->
         {:noreply, assign(socket, :rework_task_form, form)}
@@ -261,16 +250,12 @@ defmodule SymphonyElixirWeb.BoardLive do
     target_state = "Todo"
 
     if valid_board_state?(socket.assigns.payload, target_state) do
-      case Presenter.move_board_task(task_id, target_state, %{reason: "modal_move_to_todo"}) do
-        :ok ->
-          {:noreply, reload_board(socket)}
-
-        {:error, reason} ->
-          {:noreply,
-           socket
-           |> put_flash(:error, "Move to Todo failed: #{inspect(reason, pretty: false)}")
-           |> reload_board()}
-      end
+      {:noreply,
+       socket
+       |> close_task_modal()
+       |> start_board_mutation("Move to Todo failed", fn ->
+         Presenter.move_board_task(task_id, target_state, %{reason: "modal_move_to_todo"})
+       end)}
     else
       {:noreply, put_flash(socket, :error, "Move to Todo failed: Todo column unavailable")}
     end
@@ -281,20 +266,12 @@ defmodule SymphonyElixirWeb.BoardLive do
     target_state = "Merging"
 
     if valid_board_state?(socket.assigns.payload, target_state) do
-      case Presenter.move_board_task(task_id, target_state, %{reason: "modal_move_to_merging"}) do
-        :ok ->
-          {:noreply,
-           socket
-           |> reload_board()
-           |> assign(:selected_task, nil)
-           |> push_patch(to: "/")}
-
-        {:error, reason} ->
-          {:noreply,
-           socket
-           |> put_flash(:error, "Move to Merging failed: #{inspect(reason, pretty: false)}")
-           |> reload_board()}
-      end
+      {:noreply,
+       socket
+       |> close_task_modal()
+       |> start_board_mutation("Move to Merging failed", fn ->
+         Presenter.move_board_task(task_id, target_state, %{reason: "modal_move_to_merging"})
+       end)}
     else
       {:noreply, put_flash(socket, :error, "Move to Merging failed: Merging column unavailable")}
     end
@@ -334,6 +311,33 @@ defmodule SymphonyElixirWeb.BoardLive do
   @impl true
   def handle_info({:DOWN, ref, :process, _pid, _reason}, %{assigns: %{board_reload_task: %{ref: ref}}} = socket) do
     {:noreply, assign(socket, :board_reload_task, nil)}
+  end
+
+  @impl true
+  def handle_info({ref, {:board_mutation, label, result}}, socket) do
+    if board_mutation_task?(socket, ref) do
+      Process.demonitor(ref, [:flush])
+
+      {:noreply,
+       socket
+       |> drop_board_mutation_task(ref)
+       |> apply_board_mutation_result(label, result)}
+    else
+      {:noreply, socket}
+    end
+  end
+
+  @impl true
+  def handle_info({:DOWN, ref, :process, _pid, reason}, socket) do
+    if board_mutation_task?(socket, ref) do
+      {:noreply,
+       socket
+       |> drop_board_mutation_task(ref)
+       |> put_flash(:error, "Board update failed: #{inspect(reason, pretty: false)}")
+       |> reload_board()}
+    else
+      {:noreply, socket}
+    end
   end
 
   @impl true
@@ -895,13 +899,44 @@ defmodule SymphonyElixirWeb.BoardLive do
     |> refresh_selected_task()
   end
 
-  defp handle_move_result(socket, :ok, _label), do: {:noreply, reload_board(socket)}
+  defp close_task_modal(socket) do
+    socket
+    |> assign(:selected_task, nil)
+    |> push_patch(to: "/")
+  end
 
-  defp handle_move_result(socket, {:error, reason}, label) do
-    {:noreply,
-     socket
-     |> put_flash(:error, "#{label}: #{inspect(reason, pretty: false)}")
-     |> reload_board()}
+  defp start_board_mutation(socket, label, fun) when is_binary(label) and is_function(fun, 0) do
+    task =
+      Task.Supervisor.async_nolink(SymphonyElixir.TaskSupervisor, fn ->
+        {:board_mutation, label, fun.()}
+      end)
+
+    update(socket, :board_mutation_tasks, &Map.put(&1, task.ref, label))
+  end
+
+  defp board_mutation_task?(socket, ref) do
+    socket.assigns
+    |> Map.get(:board_mutation_tasks, %{})
+    |> Map.has_key?(ref)
+  end
+
+  defp drop_board_mutation_task(socket, ref) do
+    update(socket, :board_mutation_tasks, &Map.delete(&1, ref))
+  end
+
+  defp apply_board_mutation_result(socket, _label, :ok), do: reload_board(socket)
+  defp apply_board_mutation_result(socket, _label, {:ok, _result}), do: reload_board(socket)
+
+  defp apply_board_mutation_result(socket, label, {:error, reason}) do
+    socket
+    |> put_flash(:error, "#{label}: #{inspect(reason, pretty: false)}")
+    |> reload_board()
+  end
+
+  defp apply_board_mutation_result(socket, label, result) do
+    socket
+    |> put_flash(:error, "#{label}: unexpected result #{inspect(result, pretty: false)}")
+    |> reload_board()
   end
 
   defp refresh_selected_task(%{assigns: %{selected_task: %{id: task_id}}} = socket) when is_binary(task_id) do
@@ -1194,8 +1229,6 @@ defmodule SymphonyElixirWeb.BoardLive do
     end
   end
 
-  defp rework_error(reason), do: "Rework failed: #{inspect(reason, pretty: false)}"
-
   defp find_payload_task(%{board: board}, task_id) when is_map(board) do
     board
     |> board_all_columns()
@@ -1246,8 +1279,6 @@ defmodule SymphonyElixirWeb.BoardLive do
       {:error, create_task_form_with_errors(form, errors)}
     end
   end
-
-  defp create_error(reason), do: "Create failed: #{inspect(reason, pretty: false)}"
 
   defp require_known_project(errors, form, payload) do
     project_id = string_value(form, "project_id")

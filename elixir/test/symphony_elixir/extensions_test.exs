@@ -75,6 +75,8 @@ defmodule SymphonyElixir.ExtensionsTest do
     end
 
     def move_issue_on_board(task_id, state_name, opts) do
+      maybe_sleep_mutation()
+
       if recipient = Application.get_env(:symphony_elixir, :pitchai_pm_test_recipient) do
         send(recipient, {:pitchai_pm_move_issue_on_board, task_id, state_name, opts})
       end
@@ -83,6 +85,8 @@ defmodule SymphonyElixir.ExtensionsTest do
     end
 
     def create_comment(task_id, body) do
+      maybe_sleep_mutation()
+
       if recipient = Application.get_env(:symphony_elixir, :pitchai_pm_test_recipient) do
         send(recipient, {:pitchai_pm_create_comment, task_id, body})
       end
@@ -91,6 +95,8 @@ defmodule SymphonyElixir.ExtensionsTest do
     end
 
     def cancel_task_pr_links(task_id) do
+      maybe_sleep_mutation()
+
       if recipient = Application.get_env(:symphony_elixir, :pitchai_pm_test_recipient) do
         send(recipient, {:pitchai_pm_cancel_task_pr_links, task_id})
       end
@@ -545,6 +551,8 @@ defmodule SymphonyElixir.ExtensionsTest do
     def task_detail(_task_id), do: {:error, :task_not_found}
 
     def create_board_task(params) do
+      maybe_sleep_mutation()
+
       if recipient = Application.get_env(:symphony_elixir, :pitchai_pm_test_recipient) do
         send(recipient, {:pitchai_pm_create_board_task, params})
       end
@@ -576,6 +584,13 @@ defmodule SymphonyElixir.ExtensionsTest do
          created_at: "2026-05-03T12:00:00Z",
          updated_at: "2026-05-03T12:00:00Z"
        }}
+    end
+
+    defp maybe_sleep_mutation do
+      case Application.get_env(:symphony_elixir, :pitchai_pm_fake_mutation_sleep_ms, 0) do
+        milliseconds when is_integer(milliseconds) and milliseconds > 0 -> Process.sleep(milliseconds)
+        _milliseconds -> :ok
+      end
     end
   end
 
@@ -1319,9 +1334,7 @@ defmodule SymphonyElixir.ExtensionsTest do
                       "value_name" => "Task"
                     }}
 
-    assert created_html =~ "New board-created ticket"
-    assert created_html =~ "Use the board create form to capture implementation instructions."
-    refute created_html =~ "detail-chip\">Task"
+    refute created_html =~ "create-task-backdrop"
 
     hidden_html = render_click(view, "toggle_hidden_columns")
     assert hidden_html =~ "Hidden columns"
@@ -1380,11 +1393,15 @@ defmodule SymphonyElixir.ExtensionsTest do
     Application.put_env(:symphony_elixir, :pitchai_pm_test_recipient, self())
 
     render_click(view, "open_task", %{"task_id" => "issue-human-review"})
+    Application.put_env(:symphony_elixir, :pitchai_pm_fake_mutation_sleep_ms, 300)
     merging_html = render_click(view, "move_task_to_merging", %{"task_id" => "issue-human-review"})
 
-    assert_receive {:pitchai_pm_move_issue_on_board, "issue-human-review", "Merging", %{reason: "modal_move_to_merging"}}
-
     refute merging_html =~ "task-detail-backdrop"
+    refute_receive {:pitchai_pm_move_issue_on_board, "issue-human-review", "Merging", _opts}, 50
+
+    assert_receive {:pitchai_pm_move_issue_on_board, "issue-human-review", "Merging", %{reason: "modal_move_to_merging"}}, 1_000
+
+    Application.delete_env(:symphony_elixir, :pitchai_pm_fake_mutation_sleep_ms)
 
     render_hook(view, "move_task", %{"task_id" => "issue-todo", "target_state" => "Human Review"})
 
