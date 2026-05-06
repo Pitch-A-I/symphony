@@ -111,6 +111,14 @@ defmodule SymphonyElixir.CoreTest do
     assert String.trim(prompt) != ""
     assert is_binary(Config.workflow_prompt())
     assert Config.workflow_prompt() == prompt
+    assert prompt =~ "Repository-changing work must end in `Human Review` with an attached PR"
+    assert prompt =~ "Do not move repository-changing work directly from `In Progress` to `Done`"
+    assert prompt =~ "Direct `Done` is allowed only when all of these are true"
+    assert prompt =~ "Include `Symphony task: {{ issue.url }}` in the PR body"
+    assert prompt =~ "Ensure the GitHub PR has label `symphony`"
+    assert prompt =~ "PR Feedback Sweep Protocol"
+    assert prompt =~ "Rework Flow"
+    assert prompt =~ "origin/staging"
   end
 
   test "linear api token resolves from LINEAR_API_KEY env var" do
