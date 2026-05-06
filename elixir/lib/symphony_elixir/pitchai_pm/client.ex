@@ -115,7 +115,47 @@ defmodule SymphonyElixir.PitchAIPM.Client do
     t.id::text as id,
     coalesce(nullif(trim(t.public_id), ''), 'PM-' || substring(t.id::text, 1, 8)) as identifier,
     t.name as title,
-    coalesce(t.description::text, '') as description,
+    (
+      coalesce(t.description::text, '') ||
+      case
+        when lower(trim(coalesce(t.state_name, ''))) = 'rework' then
+          coalesce(
+            (
+              select E'\n\nRecent review feedback for Rework:\n' ||
+                string_agg(
+                  '- [' || context.kind || '] ' || replace(coalesce(context.body, ''), E'\n', E'\n  '),
+                  E'\n'
+                  order by context.created_at desc, context.sort_id desc
+                )
+              from (
+                select *
+                from (
+                  select
+                    c.kind,
+                    c.body,
+                    c.created_at,
+                    c.id::text as sort_id
+                  from pitchai_symphony.task_comments c
+                  where c.task_id = t.id
+                    and c.kind in ('comment', 'pr_review_response')
+                  union all
+                  select
+                    'github_pr_comment' as kind,
+                    r.body,
+                    r.github_created_at as created_at,
+                    r.id::text as sort_id
+                  from pitchai_symphony.github_pr_comment_responses r
+                  where r.task_id = t.id
+                ) context_rows
+                order by created_at desc, sort_id desc
+                limit 10
+              ) context
+            ),
+            ''
+          )
+        else ''
+      end
+    ) as description,
     t.state_name as state,
     t.project_id::text as project_id,
     p.name as project_name,

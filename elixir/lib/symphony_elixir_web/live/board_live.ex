@@ -367,10 +367,11 @@ defmodule SymphonyElixirWeb.BoardLive do
         >
           <div class="board-columns" role="list" aria-label="Ticket columns">
             <section
-              :for={column <- @payload.board.columns}
-              class="kanban-column"
+              :for={column <- board_render_columns(@payload)}
+              class={["kanban-column" | drag_shortcut_column_classes(column)]}
               role="listitem"
               data-drop-state={column.state_name}
+              data-shortcut-column={drag_shortcut_state(column)}
             >
               <% column_tasks = sorted_column_tasks(column, @column_sorts) %>
               <header class="column-header">
@@ -971,6 +972,32 @@ defmodule SymphonyElixirWeb.BoardLive do
   defp payload_column_sorts(_payload), do: %{}
 
   defp task_detail_path(task_id), do: "/?task_id=#{URI.encode_www_form(task_id)}"
+
+  defp board_render_columns(%{board: %{columns: columns, hidden_columns: hidden_columns}})
+       when is_list(columns) and is_list(hidden_columns) do
+    columns ++ drag_shortcut_columns(hidden_columns)
+  end
+
+  defp board_render_columns(%{board: %{columns: columns}}) when is_list(columns), do: columns
+  defp board_render_columns(_payload), do: []
+
+  defp drag_shortcut_columns(hidden_columns) do
+    Enum.filter(hidden_columns, &(normalize_state(Map.get(&1, :state_name)) == "rework"))
+  end
+
+  defp drag_shortcut_column_classes(column) do
+    case normalize_state(Map.get(column, :state_name)) do
+      "rework" -> ["is-hidden-shortcut-column", "is-rework-shortcut"]
+      _state -> []
+    end
+  end
+
+  defp drag_shortcut_state(column) do
+    case normalize_state(Map.get(column, :state_name)) do
+      "rework" -> "rework"
+      _state -> nil
+    end
+  end
 
   defp state_label("Symphony " <> rest), do: rest
   defp state_label(state_name), do: state_name
