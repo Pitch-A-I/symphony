@@ -1140,6 +1140,7 @@ defmodule SymphonyElixir.ExtensionsTest do
     assert html =~ "activateIntakeDoneShortcut"
     assert html =~ "restoreColumnShortcut"
     assert html =~ "activateHumanReviewReworkShortcut"
+    assert html =~ "applyColumnShortcutClass"
     assert html =~ "data-rework-todo-mirror"
     assert html =~ "Hooks.SubmitOnEnter"
     assert html =~ "toggleIssueGroupImmediately"

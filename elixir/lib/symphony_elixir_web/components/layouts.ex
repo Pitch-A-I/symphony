@@ -617,10 +617,11 @@ defmodule SymphonyElixirWeb.Layouts do
                 if (!doneColumn || !inProgressColumn || doneColumn === inProgressColumn) return;
 
                 this.columnShortcut = {
+                  mode: "suggested-done",
                   originalStates: this.columnStates(parent)
                 };
 
-                this.el.classList.add("is-suggested-done-shortcut");
+                this.applyColumnShortcutClass();
                 this.ensureIntakeDoneShortcut(true);
               },
 
@@ -639,12 +640,14 @@ defmodule SymphonyElixirWeb.Layouts do
                   originalStates: this.columnStates(parent)
                 };
 
-                this.el.classList.add("is-human-review-rework-shortcut");
+                this.applyColumnShortcutClass();
                 this.ensureHumanReviewReworkShortcut(true);
               },
 
               ensureActiveColumnShortcut: function () {
                 if (!this.columnShortcut) return;
+
+                this.applyColumnShortcutClass();
 
                 if (this.columnShortcut.mode === "human-review-rework") {
                   this.ensureHumanReviewReworkShortcut();
@@ -653,9 +656,19 @@ defmodule SymphonyElixirWeb.Layouts do
                 }
               },
 
+              applyColumnShortcutClass: function () {
+                if (!this.columnShortcut) return;
+
+                var isHumanReviewRework = this.columnShortcut.mode === "human-review-rework";
+                this.el.classList.toggle("is-human-review-rework-shortcut", isHumanReviewRework);
+                this.el.classList.toggle("is-suggested-done-shortcut", !isHumanReviewRework);
+              },
+
               ensureIntakeDoneShortcut: function (animate) {
                 if (!this.columnShortcut) return;
                 if (this.columnShortcut.mode && this.columnShortcut.mode !== "suggested-done") return;
+
+                this.applyColumnShortcutClass();
 
                 var parent = this.boardColumnsContainer();
                 if (!parent) return;
@@ -688,6 +701,8 @@ defmodule SymphonyElixirWeb.Layouts do
 
               ensureHumanReviewReworkShortcut: function (animate) {
                 if (!this.columnShortcut || this.columnShortcut.mode !== "human-review-rework") return;
+
+                this.applyColumnShortcutClass();
 
                 var parent = this.boardColumnsContainer();
                 if (!parent) return;
