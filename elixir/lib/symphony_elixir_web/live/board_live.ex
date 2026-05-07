@@ -1119,47 +1119,39 @@ defmodule SymphonyElixirWeb.BoardLive do
   end
 
   defp mirror_rework_tasks_into_todo(columns, hidden_columns) do
-    case rework_todo_mirror_tasks(hidden_columns) do
+    case rework_todo_mirror_tasks(columns, hidden_columns) do
       [] ->
         columns
 
       rework_tasks ->
-        Enum.map(columns, &maybe_add_rework_todo_mirrors(&1, rework_tasks, hidden_columns))
+        Enum.map(columns, &maybe_add_rework_todo_mirrors(&1, rework_tasks))
     end
   end
 
-  defp rework_todo_mirror_tasks(hidden_columns) do
-    hidden_columns
-    |> Enum.find(&(normalize_state(Map.get(&1, :state_name)) == "rework"))
-    |> case do
-      %{tasks: tasks} when is_list(tasks) ->
-        Enum.map(tasks, &Map.put(&1, :todo_mirror_source_state, "Rework"))
-
-      _missing ->
-        []
-    end
+  defp rework_todo_mirror_tasks(columns, hidden_columns) do
+    (columns ++ hidden_columns)
+    |> Enum.filter(&(normalize_state(Map.get(&1, :state_name)) == "rework"))
+    |> Enum.flat_map(fn
+      %{tasks: tasks} when is_list(tasks) -> tasks
+      _column -> []
+    end)
+    |> Enum.uniq_by(&Map.get(&1, :id))
+    |> Enum.map(&Map.put(&1, :todo_mirror_source_state, "Rework"))
   end
 
-  defp maybe_add_rework_todo_mirrors(column, rework_tasks, hidden_columns) do
+  defp maybe_add_rework_todo_mirrors(column, rework_tasks) do
     if normalize_state(Map.get(column, :state_name)) == "todo" do
       column
       |> Map.update(:tasks, rework_tasks, &(&1 ++ rework_tasks))
-      |> Map.put(:task_count, todo_with_rework_task_count(column, hidden_columns))
+      |> Map.put(:task_count, todo_with_rework_task_count(column, rework_tasks))
     else
       column
     end
   end
 
-  defp todo_with_rework_task_count(todo_column, hidden_columns) do
-    rework_count =
-      hidden_columns
-      |> Enum.find(&(normalize_state(Map.get(&1, :state_name)) == "rework"))
-      |> case do
-        nil -> 0
-        rework_column -> integer_count(Map.get(rework_column, :task_count), length(Map.get(rework_column, :tasks, [])))
-      end
-
-    integer_count(Map.get(todo_column, :task_count), length(Map.get(todo_column, :tasks, []))) + rework_count
+  defp todo_with_rework_task_count(todo_column, rework_tasks) do
+    integer_count(Map.get(todo_column, :task_count), length(Map.get(todo_column, :tasks, []))) +
+      length(rework_tasks)
   end
 
   defp state_label("Symphony " <> rest), do: rest
