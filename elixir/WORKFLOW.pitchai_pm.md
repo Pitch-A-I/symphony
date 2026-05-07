@@ -143,7 +143,7 @@ The `pitchai_pm` dynamic tool is the project-management authority for this workf
 - `Ready` and `Symphony Ready` are legacy aliases for `Todo`; do not set tasks to either value.
 - `Active` or `Symphony Active` -> aliases for `In Progress`; implementation is actively underway.
 - `In Progress` -> implementation actively underway. The orchestrator only dispatches In Progress tasks assigned to `symphony`.
-- `Human Review` -> PR is attached and validated; waiting on human approval. Do not code.
+- `Human Review` -> PR is attached and validated; waiting on human approval. Do not code. Symphony keeps attached PR CI warm while the task waits here.
 - `Merging` -> approved by human; execute the `land` skill flow.
 - `Rework` -> reviewer requested changes; planning and implementation required.
 - `Blocked` -> true blocker recorded; do not continue until unblocked.
@@ -286,6 +286,7 @@ Use this only when completion is blocked by missing required tools, auth, permis
 10. Before moving to `Human Review`, poll PR feedback and checks:
     - Run the full PR feedback sweep protocol.
     - Confirm required checks are passing or record why no checks exist.
+    - Leave the PR branch pushed at the exact reviewed head; Symphony will keep PR CI observed or running while the task waits in `Human Review`.
     - Confirm every required validation item is marked complete in the workpad.
     - Refresh the workpad so `Plan`, `Acceptance Criteria`, and `Validation` exactly match completed work.
 11. Only then move repository-changing work to `Human Review`.
@@ -293,7 +294,7 @@ Use this only when completion is blocked by missing required tools, auth, permis
 
 ## Merge Handling
 
-When the task state is `Merging`, open and follow `.codex/skills/land/SKILL.md`. Do not call `gh pr merge` directly. Keep working until the PR is merged or a true blocker is recorded. After merge, call:
+When the task state is `Merging`, open and follow `.codex/skills/land/SKILL.md`. Do not call `gh pr merge` directly. First inspect the existing PR check state at the current head: if Human Review prewarmed CI already completed successfully, use that result; if checks are still running, wait on the existing run instead of pushing or rerunning just to start CI. Only rerun or retrigger checks after a real head change, a failed/stale run that needs investigation, or a documented repository-specific CI requirement. Keep working until the PR is merged or a true blocker is recorded. After merge, call:
 
 ```json
 {"operation": "update_task_state", "params": {"task_id": "{{ issue.id }}", "state_name": "Done"}}
@@ -304,6 +305,8 @@ Then append a changelog entry summarizing the merge.
 ## Human Review and PR Handoff
 
 When a task is in `Human Review`, do not code or change task content except to answer reviewer questions through the approved PR-comment/resume flow.
+
+While the task waits in `Human Review`, Symphony polls attached PRs and prewarms CI by observing the current PR head checks and requesting a missing check suite when GitHub exposes one. Treat this as a latency optimization only: green checks may be reused during `Merging`, running checks should simply be waited on, and failed checks still require the normal land investigation/fix loop.
 
 Before moving a task to `Human Review`, make the review path usable by a remote human:
 

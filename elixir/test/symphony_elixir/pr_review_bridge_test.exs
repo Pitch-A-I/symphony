@@ -14,10 +14,15 @@ defmodule SymphonyElixir.PRReviewBridgeTest do
 
     def claim_pending_github_pr_comment(_worker_id) do
       Agent.get_and_update(state_agent(), fn state ->
-        if Map.get(state, :claimed?) do
-          {{:ok, nil}, state}
-        else
-          {{:ok, Map.fetch!(state, :response)}, Map.put(state, :claimed?, true)}
+        cond do
+          is_nil(Map.get(state, :response)) ->
+            {{:ok, nil}, state}
+
+          Map.get(state, :claimed?) ->
+            {{:ok, nil}, state}
+
+          true ->
+            {{:ok, Map.fetch!(state, :response)}, Map.put(state, :claimed?, true)}
         end
       end)
     end
@@ -83,6 +88,17 @@ defmodule SymphonyElixir.PRReviewBridgeTest do
       )
 
       {:ok, %{id: "2002", url: "https://github.com/pitchai/example/pull/12#issuecomment-2002"}}
+    end
+
+    def ensure_pr_ci_prewarmed(repo_full_name, pr_number) do
+      Agent.update(
+        state_agent(),
+        &Map.update(&1, :ci_prewarmed, [%{repo_full_name: repo_full_name, pr_number: pr_number}], fn checks ->
+          [%{repo_full_name: repo_full_name, pr_number: pr_number} | checks]
+        end)
+      )
+
+      {:ok, %{state: "running", action: "observed", total: 2, pending: 1, failed: 0, passed: 1, head_sha: "abc123"}}
     end
 
     defp state_agent, do: Application.fetch_env!(:symphony_elixir, :pr_review_bridge_test_agent)
@@ -190,6 +206,61 @@ defmodule SymphonyElixir.PRReviewBridgeTest do
       assert prompt =~ "Can you explain why this fixes the timeout?"
       assert github_reply_body =~ "<!-- symphony-pr-review-response"
       assert github_reply_body =~ "@reviewer"
+      assert [%{repo_full_name: "pitchai/example", pr_number: 12}] = state.ci_prewarmed
+    end)
+  end
+
+  test "PR review bridge prewarms CI for Human Review PRs without a resume session" do
+    {:ok, state_agent} =
+      Agent.start_link(fn ->
+        %{
+          links: [
+            %{
+              task_id: "11111111-1111-1111-1111-111111111111",
+              identifier: "PM-12345678",
+              title: "Review bridge CI prewarm test",
+              pr_link_id: 42,
+              url: "https://github.com/pitchai/example/pull/12",
+              repo_full_name: "pitchai/example",
+              pr_number: 12
+            }
+          ]
+        }
+      end)
+
+    original_pm_client = Application.get_env(:symphony_elixir, :pitchai_pm_client_module)
+    original_github_client = Application.get_env(:symphony_elixir, :github_client_module)
+    original_agent = Application.get_env(:symphony_elixir, :pr_review_bridge_test_agent)
+
+    Application.put_env(:symphony_elixir, :pitchai_pm_client_module, FakePitchAIPMClient)
+    Application.put_env(:symphony_elixir, :github_client_module, FakeGitHubClient)
+    Application.put_env(:symphony_elixir, :pr_review_bridge_test_agent, state_agent)
+
+    on_exit(fn ->
+      restore_application_env(:pitchai_pm_client_module, original_pm_client)
+      restore_application_env(:github_client_module, original_github_client)
+      restore_application_env(:pr_review_bridge_test_agent, original_agent)
+    end)
+
+    write_workflow_file!(Workflow.workflow_file_path(),
+      tracker_kind: "pitchai_pm",
+      tracker_project_id: "project-pm",
+      tracker_database_url: "postgres://postgres:postgres@example.invalid/pm"
+    )
+
+    bridge_name = Module.concat(__MODULE__, :CIPrewarmBridge)
+    {:ok, bridge} = GenServer.start(SymphonyElixir.PRReviewBridge, [], name: bridge_name)
+
+    on_exit(fn ->
+      if Process.alive?(bridge), do: Process.exit(bridge, :normal)
+    end)
+
+    send(bridge, :poll)
+
+    assert_eventually(fn ->
+      state = Agent.get(state_agent, & &1)
+      assert [%{repo_full_name: "pitchai/example", pr_number: 12}] = Map.get(state, :ci_prewarmed)
+      refute Map.has_key?(state, :codex_resume)
     end)
   end
 

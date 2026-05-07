@@ -1,6 +1,7 @@
 defmodule SymphonyElixir.PRReviewBridge do
   @moduledoc """
-  Polls linked GitHub PRs in Human Review and asks the original Codex session to answer new comments.
+  Polls linked GitHub PRs in Human Review, keeps CI warm, and asks the original
+  Codex session to answer new comments.
   """
 
   use GenServer
@@ -14,13 +15,17 @@ defmodule SymphonyElixir.PRReviewBridge do
 
   @poll_interval_ms 15_000
   @max_in_flight 1
+  @ci_prewarm_interval_ms 300_000
+  @ci_prewarm_running_interval_ms 60_000
+  @ci_prewarm_error_interval_ms 120_000
 
-  defstruct timer_ref: nil, in_flight: %{}, worker_id: nil
+  defstruct timer_ref: nil, in_flight: %{}, worker_id: nil, ci_prewarm: %{}
 
   @type state :: %__MODULE__{
           timer_ref: reference() | nil,
           in_flight: %{optional(reference()) => map()},
-          worker_id: String.t() | nil
+          worker_id: String.t() | nil,
+          ci_prewarm: %{optional(String.t()) => map()}
         }
 
   @spec start_link(keyword()) :: GenServer.on_start()
@@ -41,8 +46,9 @@ defmodule SymphonyElixir.PRReviewBridge do
 
     state =
       if bridge_enabled?() do
-        sync_linked_pr_comments()
-        dispatch_pending_comments(state)
+        state
+        |> sync_linked_prs()
+        |> dispatch_pending_comments()
       else
         state
       end
@@ -79,20 +85,26 @@ defmodule SymphonyElixir.PRReviewBridge do
       false
   end
 
-  defp sync_linked_pr_comments do
+  defp sync_linked_prs(%__MODULE__{} = state) do
     client = pitchai_pm_client()
 
     if function_exported?(client, :human_review_pr_links, 0) do
       case client.human_review_pr_links() do
         {:ok, links} ->
-          Enum.each(links, &sync_pr_link_comments/1)
+          Enum.reduce(links, state, &sync_pr_link/2)
 
         {:error, reason} ->
           Logger.warning("PR review bridge failed to list Human Review PR links: #{inspect(reason)}")
+          state
       end
     else
-      :ok
+      state
     end
+  end
+
+  defp sync_pr_link(link, %__MODULE__{} = state) do
+    sync_pr_link_comments(link)
+    maybe_prewarm_pr_ci(state, link)
   end
 
   defp sync_pr_link_comments(link) do
@@ -109,6 +121,96 @@ defmodule SymphonyElixir.PRReviewBridge do
       {:error, reason} ->
         Logger.warning("PR review bridge failed to sync PR link #{inspect(Map.get(link, :url))}: #{inspect(reason)}")
     end
+  end
+
+  defp maybe_prewarm_pr_ci(%__MODULE__{} = state, link) when is_map(link) do
+    case normalize_pr_link_for_ci(link) do
+      {:ok, normalized_link} ->
+        do_maybe_prewarm_pr_ci(state, normalized_link)
+
+      {:skip, reason} ->
+        Logger.debug("PR review bridge skipped CI prewarm: #{inspect(reason)}")
+        state
+    end
+  end
+
+  defp maybe_prewarm_pr_ci(%__MODULE__{} = state, _link), do: state
+
+  defp do_maybe_prewarm_pr_ci(%__MODULE__{} = state, link) do
+    key = ci_prewarm_key(link)
+    now_ms = System.monotonic_time(:millisecond)
+    previous = Map.get(state.ci_prewarm, key)
+
+    if ci_prewarm_due?(previous, now_ms) do
+      prewarm_pr_ci(state, link, key, now_ms)
+    else
+      state
+    end
+  end
+
+  defp prewarm_pr_ci(%__MODULE__{} = state, link, key, now_ms) do
+    result =
+      case github_client().ensure_pr_ci_prewarmed(link.repo_full_name, link.pr_number) do
+        {:ok, result} ->
+          log_ci_prewarm_result(link, result)
+          %{status: :ok, result: result}
+
+        {:error, reason} ->
+          Logger.warning("PR review bridge failed to prewarm CI for #{link.identifier} #{link.url}: #{inspect(reason)}")
+          %{status: :error, reason: reason}
+      end
+
+    %{state | ci_prewarm: Map.put(state.ci_prewarm, key, Map.put(result, :checked_at_ms, now_ms))}
+  end
+
+  defp ci_prewarm_due?(nil, _now_ms), do: true
+
+  defp ci_prewarm_due?(%{checked_at_ms: checked_at_ms} = previous, now_ms) when is_integer(checked_at_ms) do
+    now_ms - checked_at_ms >= ci_prewarm_interval(previous)
+  end
+
+  defp ci_prewarm_due?(_previous, _now_ms), do: true
+
+  defp ci_prewarm_interval(%{status: :error}), do: @ci_prewarm_error_interval_ms
+  defp ci_prewarm_interval(%{result: %{state: "running"}}), do: @ci_prewarm_running_interval_ms
+  defp ci_prewarm_interval(_previous), do: @ci_prewarm_interval_ms
+
+  defp log_ci_prewarm_result(link, result) when is_map(result) do
+    action = Map.get(result, :action, "observed")
+    state = Map.get(result, :state, "unknown")
+    total = Map.get(result, :total, 0)
+    pending = Map.get(result, :pending, 0)
+    failed = Map.get(result, :failed, 0)
+    head_sha = Map.get(result, :head_sha)
+
+    Logger.info("PR review bridge CI prewarm #{action}: #{link.identifier} #{link.url} state=#{state} total=#{total} pending=#{pending} failed=#{failed} head_sha=#{head_sha}")
+  end
+
+  defp normalize_pr_link_for_ci(link) when is_map(link) do
+    with {:ok, pr_ref} <- pr_ref_from_link(link),
+         task_id when is_binary(task_id) <- clean_string(Map.get(link, :task_id)) do
+      {:ok,
+       link
+       |> Map.put(:task_id, task_id)
+       |> Map.put(:repo_full_name, pr_ref.repo_full_name)
+       |> Map.put(:pr_number, pr_ref.pr_number)
+       |> Map.put(:identifier, clean_string(Map.get(link, :identifier)) || task_id)}
+    else
+      {:error, reason} -> {:skip, reason}
+      nil -> {:skip, :missing_task_id}
+    end
+  end
+
+  defp normalize_pr_link_for_ci(_link), do: {:skip, :invalid_pr_link}
+
+  defp ci_prewarm_key(link) do
+    [
+      Map.get(link, :pr_link_id),
+      Map.get(link, :task_id),
+      Map.get(link, :repo_full_name),
+      Map.get(link, :pr_number)
+    ]
+    |> Enum.map_join(":", &to_string/1)
   end
 
   defp normalize_pr_link(link) when is_map(link) do

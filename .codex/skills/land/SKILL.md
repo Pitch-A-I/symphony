@@ -34,25 +34,28 @@ description:
    resolve conflicts, then use the `push` skill to publish the updated branch.
 6. Ensure Codex review comments (if present) are acknowledged and any required
    fixes are handled before merging.
-7. Watch checks until complete.
-8. If checks fail, pull logs, fix the issue, commit with the `commit` skill,
+7. Inspect the current PR check state before watching. Symphony may have
+   prewarmed CI while the task was in `Human Review`; reuse green checks and
+   wait on running checks instead of pushing or rerunning just to start CI.
+8. Watch checks until complete.
+9. If checks fail, pull logs, fix the issue, commit with the `commit` skill,
    push with the `push` skill, and re-run checks.
-9. When all checks are green and review feedback is addressed, squash-merge and
+10. When all checks are green and review feedback is addressed, squash-merge and
    delete the branch using the PR title/body for the merge subject/body.
-10. **Context guard:** Before implementing review feedback, confirm it does not
+11. **Context guard:** Before implementing review feedback, confirm it does not
     conflict with the user’s stated intent or task context. If it conflicts,
     respond inline with a justification and ask the user before changing code.
-11. **Pushback template:** When disagreeing, reply inline with: acknowledge +
+12. **Pushback template:** When disagreeing, reply inline with: acknowledge +
     rationale + offer alternative.
-12. **Ambiguity gate:** When ambiguity blocks progress, use the clarification
+13. **Ambiguity gate:** When ambiguity blocks progress, use the clarification
     flow (assign PR to current GH user, mention them, wait for response). Do not
     implement until ambiguity is resolved.
     - If you are confident you know better than the reviewer, you may proceed
       without asking the user, but reply inline with your rationale.
-13. **Per-comment mode:** For each review comment, choose one of: accept,
+14. **Per-comment mode:** For each review comment, choose one of: accept,
     clarify, or push back. Reply inline (or in the issue thread for Codex
     reviews) stating the mode before changing code.
-14. **Reply before change:** Always respond with intended action before pushing
+15. **Reply before change:** Always respond with intended action before pushing
     code changes (inline for review comments, issue thread for Codex reviews).
 
 ## Commands
@@ -85,7 +88,13 @@ while true; do
   sleep 10
 done
 
-# Watch checks
+# Inspect and reuse prewarmed checks when possible. If this already reports all
+# checks passing, do not rerun CI or push a no-op commit.
+gh pr checks || true
+
+# Watch checks. If checks are already running from Human Review prewarm, this
+# waits on the existing run and should usually be shorter than starting from
+# scratch.
 if ! gh pr checks --watch; then
   gh pr checks
   # Identify failing run and inspect logs
@@ -118,6 +127,12 @@ Exit codes:
 - If checks fail, pull details with `gh pr checks` and `gh run view --log`, then
   fix locally, commit with the `commit` skill, push with the `push` skill, and
   re-run the watch.
+- If checks are already green when Merging starts, reuse that result. Do not
+  rerun CI unless the PR head changed, the result is stale for a
+  repository-specific reason, or a failed/cancelled run needs an intentional
+  rerun after investigation.
+- If checks are already pending or running when Merging starts, wait on that
+  existing run. Do not push a no-op commit solely to start CI.
 - Use judgment to identify flaky failures. If a failure is a flake (e.g., a
   timeout on only one platform), you may proceed without fixing it.
 - If CI pushes an auto-fix commit (authored by GitHub Actions), it does not
