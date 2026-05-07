@@ -308,7 +308,35 @@ defmodule SymphonyElixir.ExtensionsTest do
            }
          ],
          hidden_columns: [
-           %{state_name: "Rework", color: "#dc2626", task_count: 0, hidden?: true, tasks: []},
+           %{
+             state_name: "Rework",
+             color: "#dc2626",
+             task_count: 1,
+             hidden?: true,
+             tasks: [
+               %{
+                 id: "issue-rework",
+                 identifier: "MT-REWORK",
+                 title: "Revise dirty-table invalidation PR",
+                 state: "Rework",
+                 value_name: "Task",
+                 project_id: "project-pm",
+                 project_name: "TODO App",
+                 assignee: "symphony",
+                 priority: 4,
+                 rank: 1536.0,
+                 labels: [],
+                 branch_name: nil,
+                 url: "",
+                 updated_at: "2026-05-02T14:00:00Z",
+                 created_at: "2026-05-01T14:00:00Z",
+                 comment_count: 0,
+                 downstream_count: 0,
+                 pr_count: 0,
+                 workpad_updated_at: nil
+               }
+             ]
+           },
            %{state_name: "Duplicate", color: "#94a3b8", task_count: 0, hidden?: true, tasks: []}
          ]
        }}
@@ -1112,6 +1140,7 @@ defmodule SymphonyElixir.ExtensionsTest do
     assert html =~ "activateIntakeDoneShortcut"
     assert html =~ "restoreColumnShortcut"
     assert html =~ "activateHumanReviewReworkShortcut"
+    assert html =~ "data-rework-todo-mirror"
     assert html =~ "Hooks.SubmitOnEnter"
     assert html =~ "toggleIssueGroupImmediately"
     assert html =~ "/vendor/phoenix_html/phoenix_html.js"
@@ -1128,6 +1157,8 @@ defmodule SymphonyElixir.ExtensionsTest do
     assert dashboard_css =~ "body.has-modal-open"
     assert dashboard_css =~ ".board-columns"
     assert dashboard_css =~ ".ticket-card"
+    assert dashboard_css =~ ".ticket-card.is-rework-todo-mirror"
+    assert dashboard_css =~ ".rework-mirror-badge"
     assert dashboard_css =~ ".ticket-blocked-reason"
     assert dashboard_css =~ ".dependency-badge"
     assert dashboard_css =~ ".group-chevron"
@@ -1267,6 +1298,11 @@ defmodule SymphonyElixir.ExtensionsTest do
     refute html =~ ">Active<"
     refute html =~ "runtime-badge running"
     assert html =~ "MT-890"
+    assert html =~ "MT-REWORK"
+    assert html =~ "Revise dirty-table invalidation PR"
+    assert html =~ "is-rework-todo-mirror"
+    assert html =~ ~s(data-rework-todo-mirror="true")
+    assert html =~ ~s(<span class="soft-badge rework-mirror-badge">Rework</span>)
     assert html =~ "Newest completed ticket"
     assert html =~ "Older completed ticket"
     assert html_index(html, "Newest completed ticket") < html_index(html, "Older completed ticket")

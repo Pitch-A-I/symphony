@@ -234,6 +234,7 @@ defmodule SymphonyElixirWeb.Layouts do
 
                 var card = event.target.closest(".ticket-card");
                 if (!card || !this.el.contains(card)) return;
+                if (card.getAttribute("data-rework-todo-mirror") === "true") return;
                 if (event.target.closest("a, button, input, select, textarea")) return;
 
                 var taskId = card.getAttribute("data-task-id");

@@ -649,6 +649,17 @@ body.is-kanban-dragging * {
   box-shadow: 0 0 0 1px rgba(208, 79, 115, 0.1);
 }
 
+.ticket-card.is-rework-todo-mirror {
+  border-color: rgba(220, 38, 38, 0.24);
+  background: #fffafb;
+  cursor: pointer;
+}
+
+body.is-kanban-drag-pending .ticket-card.is-rework-todo-mirror,
+body.is-kanban-dragging .ticket-card.is-rework-todo-mirror {
+  display: none;
+}
+
 .ticket-key {
   color: #69717f;
   font-size: 0.66rem;
@@ -732,6 +743,12 @@ body.is-kanban-dragging * {
   border: 1px solid rgba(37, 99, 235, 0.18);
   background: #eef4ff;
   color: #2456b4;
+}
+
+.rework-mirror-badge {
+  border: 1px solid rgba(220, 38, 38, 0.2);
+  background: #fff0f2;
+  color: #b4233f;
 }
 
 .ticket-meta {

@@ -485,10 +485,11 @@ defmodule SymphonyElixirWeb.BoardLive do
                   <article
                     :if={!group.collapsed}
                     :for={task <- group.tasks}
-                    class={["ticket-card", runtime_class(task)]}
+                    class={["ticket-card", runtime_class(task), rework_todo_mirror_class(task)]}
                     data-task-id={task.id}
                     data-task-title={task.title}
-                    data-state-name={column.state_name}
+                    data-state-name={card_state_name(task, column)}
+                    data-rework-todo-mirror={to_string(rework_todo_mirror?(task))}
                     phx-click="open_task"
                     phx-value-task_id={task.id}
                   >
@@ -517,6 +518,7 @@ defmodule SymphonyElixirWeb.BoardLive do
                         P<%= task.priority %>
                       </span>
                       <span :if={task.pr_count > 0} class="soft-badge">PR</span>
+                      <span :if={rework_todo_mirror?(task)} class="soft-badge rework-mirror-badge">Rework</span>
                       <span :if={task.comment_count > 0} class="soft-badge"><%= task.comment_count %> comments</span>
                       <span
                         :if={dependency_descendant_label(task)}
@@ -1090,7 +1092,9 @@ defmodule SymphonyElixirWeb.BoardLive do
 
   defp board_render_columns(%{board: %{columns: columns, hidden_columns: hidden_columns}})
        when is_list(columns) and is_list(hidden_columns) do
-    columns ++ drag_shortcut_columns(hidden_columns)
+    columns
+    |> mirror_rework_tasks_into_todo(hidden_columns)
+    |> Kernel.++(drag_shortcut_columns(hidden_columns))
   end
 
   defp board_render_columns(%{board: %{columns: columns}}) when is_list(columns), do: columns
@@ -1114,12 +1118,70 @@ defmodule SymphonyElixirWeb.BoardLive do
     end
   end
 
+  defp mirror_rework_tasks_into_todo(columns, hidden_columns) do
+    case rework_todo_mirror_tasks(hidden_columns) do
+      [] ->
+        columns
+
+      rework_tasks ->
+        Enum.map(columns, &maybe_add_rework_todo_mirrors(&1, rework_tasks, hidden_columns))
+    end
+  end
+
+  defp rework_todo_mirror_tasks(hidden_columns) do
+    hidden_columns
+    |> Enum.find(&(normalize_state(Map.get(&1, :state_name)) == "rework"))
+    |> case do
+      %{tasks: tasks} when is_list(tasks) ->
+        Enum.map(tasks, &Map.put(&1, :todo_mirror_source_state, "Rework"))
+
+      _missing ->
+        []
+    end
+  end
+
+  defp maybe_add_rework_todo_mirrors(column, rework_tasks, hidden_columns) do
+    if normalize_state(Map.get(column, :state_name)) == "todo" do
+      column
+      |> Map.update(:tasks, rework_tasks, &(&1 ++ rework_tasks))
+      |> Map.put(:task_count, todo_with_rework_task_count(column, hidden_columns))
+    else
+      column
+    end
+  end
+
+  defp todo_with_rework_task_count(todo_column, hidden_columns) do
+    rework_count =
+      hidden_columns
+      |> Enum.find(&(normalize_state(Map.get(&1, :state_name)) == "rework"))
+      |> case do
+        nil -> 0
+        rework_column -> integer_count(Map.get(rework_column, :task_count), length(Map.get(rework_column, :tasks, [])))
+      end
+
+    integer_count(Map.get(todo_column, :task_count), length(Map.get(todo_column, :tasks, []))) + rework_count
+  end
+
   defp state_label("Symphony " <> rest), do: rest
   defp state_label(state_name), do: state_name
 
   defp runtime_class(%{runtime_status: %{kind: "running"}}), do: "is-running"
   defp runtime_class(%{runtime_status: %{kind: "retrying"}}), do: "is-retrying"
   defp runtime_class(_task), do: nil
+
+  defp rework_todo_mirror_class(task) do
+    if rework_todo_mirror?(task), do: "is-rework-todo-mirror", else: nil
+  end
+
+  defp rework_todo_mirror?(task) when is_map(task) do
+    normalize_state(Map.get(task, :todo_mirror_source_state)) == "rework"
+  end
+
+  defp rework_todo_mirror?(_task), do: false
+
+  defp card_state_name(task, column) do
+    if rework_todo_mirror?(task), do: "Rework", else: Map.get(column, :state_name)
+  end
 
   defp visible_runtime_badge(%{kind: "running"}), do: nil
   defp visible_runtime_badge(%{label: label}) when is_binary(label), do: label
@@ -1616,6 +1678,17 @@ defmodule SymphonyElixirWeb.BoardLive do
       _invalid -> 0
     end
   end
+
+  defp integer_count(value, _fallback) when is_integer(value), do: value
+
+  defp integer_count(value, fallback) when is_binary(value) do
+    case Integer.parse(value) do
+      {integer, ""} when integer >= 0 -> integer
+      _invalid -> fallback
+    end
+  end
+
+  defp integer_count(_value, fallback), do: fallback
 
   defp visible_workpad_sections(%{workpad_sections: sections} = task) when is_list(sections) do
     Enum.reject(sections, &empty_optional_blockers_section?(&1, task))
