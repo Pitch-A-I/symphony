@@ -12,6 +12,7 @@ defmodule SymphonyElixir.Codex.AppServer do
   @port_line_bytes 1_048_576
   @max_stream_log_bytes 1_000
   @non_interactive_tool_input_answer "This is a non-interactive session. Operator input is unavailable."
+  @service_tier "fast"
 
   @type session :: %{
           port: port(),
@@ -320,7 +321,8 @@ defmodule SymphonyElixir.Codex.AppServer do
         "approvalPolicy" => approval_policy,
         "sandbox" => thread_sandbox,
         "cwd" => workspace,
-        "dynamicTools" => DynamicTool.tool_specs()
+        "dynamicTools" => DynamicTool.tool_specs(),
+        "serviceTier" => @service_tier
       }
     })
 
@@ -351,7 +353,8 @@ defmodule SymphonyElixir.Codex.AppServer do
         "cwd" => workspace,
         "title" => "#{issue.identifier}: #{issue.title}",
         "approvalPolicy" => approval_policy,
-        "sandboxPolicy" => turn_sandbox_policy
+        "sandboxPolicy" => turn_sandbox_policy,
+        "serviceTier" => @service_tier
       }
     })
 

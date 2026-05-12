@@ -170,9 +170,24 @@ defmodule SymphonyElixir.AppServerTest do
                    |> String.trim_leading("JSON:")
                    |> Jason.decode!()
                    |> then(fn payload ->
+                     payload["method"] == "thread/start" &&
+                       get_in(payload, ["params", "serviceTier"]) == "fast"
+                   end)
+                 else
+                   false
+                 end
+               end)
+
+        assert Enum.any?(lines, fn line ->
+                 if String.starts_with?(line, "JSON:") do
+                   line
+                   |> String.trim_leading("JSON:")
+                   |> Jason.decode!()
+                   |> then(fn payload ->
                      payload["method"] == "turn/start" &&
                        get_in(payload, ["params", "approvalPolicy"]) == "never" &&
-                       get_in(payload, ["params", "sandboxPolicy"]) == %{"type" => "dangerFullAccess"}
+                       get_in(payload, ["params", "sandboxPolicy"]) == %{"type" => "dangerFullAccess"} &&
+                       get_in(payload, ["params", "serviceTier"]) == "fast"
                    end)
                  else
                    false
@@ -1381,7 +1396,8 @@ defmodule SymphonyElixir.AppServerTest do
                    payload["method"] == "thread/start" &&
                      get_in(payload, ["params", "cwd"]) == remote_workspace &&
                      get_in(payload, ["params", "approvalPolicy"]) == "never" &&
-                     get_in(payload, ["params", "sandbox"]) == "danger-full-access"
+                     get_in(payload, ["params", "sandbox"]) == "danger-full-access" &&
+                     get_in(payload, ["params", "serviceTier"]) == "fast"
                  end)
                else
                  false
@@ -1397,7 +1413,8 @@ defmodule SymphonyElixir.AppServerTest do
                    payload["method"] == "turn/start" &&
                      get_in(payload, ["params", "cwd"]) == remote_workspace &&
                      get_in(payload, ["params", "approvalPolicy"]) == "never" &&
-                     get_in(payload, ["params", "sandboxPolicy"]) == expected_turn_policy
+                     get_in(payload, ["params", "sandboxPolicy"]) == expected_turn_policy &&
+                     get_in(payload, ["params", "serviceTier"]) == "fast"
                  end)
                else
                  false
