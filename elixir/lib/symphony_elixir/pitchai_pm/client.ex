@@ -6,11 +6,14 @@ defmodule SymphonyElixir.PitchAIPM.Client do
   alias SymphonyElixir.Config
   alias SymphonyElixir.Linear.Issue
   alias SymphonyElixir.PitchAIPM.BlockerReconciler
+  require Logger
 
   @default_limit 100
   @board_task_limit_per_state 1_000
-  @connect_timeout 5_000
-  @query_timeout 15_000
+  @retired_error {
+    :pitchai_symphony_retired,
+    "The legacy pitchai_symphony schema and Symphony pitchai_pm client are retired. Use supported PM tables in public.* and Dispatcher tables in pitchai_dispatch.* instead."
+  }
   @blocker_reconciler_source "pitchai_symphony_blocker_reconciler"
   @blocker_task_labels ["auto-blocker", "blocker", "symphony"]
   @blocker_reconciliation_agent_kind "blocker_reconciliation_agent"
@@ -1462,8 +1465,14 @@ defmodule SymphonyElixir.PitchAIPM.Client do
   end
 
   @spec tool_operation(String.t(), map()) :: {:ok, map()} | {:error, term()}
-  def tool_operation(operation, params) when is_binary(operation) and is_map(params) do
-    operation_handlers = %{
+  def tool_operation(_operation, _params) do
+    _ = legacy_operation_handlers()
+
+    retired_error()
+  end
+
+  defp legacy_operation_handlers do
+    %{
       "get_task" => &tool_get_task/1,
       "list_tasks" => &tool_list_tasks/1,
       "list_workflow_states" => &tool_list_workflow_states/1,
@@ -1479,13 +1488,11 @@ defmodule SymphonyElixir.PitchAIPM.Client do
       "link_task_dependency" => &tool_link_task_dependency/1,
       "merge_duplicate_blocker_task" => &tool_merge_duplicate_blocker_task/1
     }
+  end
 
-    normalized_operation = String.trim(operation)
-
-    case Map.fetch(operation_handlers, normalized_operation) do
-      {:ok, handler} -> handler.(params)
-      :error -> {:error, {:unsupported_pitchai_pm_operation, normalized_operation}}
-    end
+  defp retired_error do
+    Logger.error(elem(@retired_error, 1))
+    {:error, @retired_error}
   end
 
   defp fetch_candidate_tasks_by_scope(state_names, opts) do
@@ -2200,86 +2207,9 @@ defmodule SymphonyElixir.PitchAIPM.Client do
   end
 
   defp query(sql, params) when is_binary(sql) and is_list(params) do
-    with {:ok, conn} <- Postgrex.start_link(database_opts()) do
-      try do
-        Postgrex.query(conn, sql, params, timeout: @query_timeout)
-      after
-        if Process.alive?(conn), do: GenServer.stop(conn)
-      end
-    end
-  rescue
-    error -> {:error, {error.__struct__, Exception.message(error)}}
-  catch
-    kind, reason -> {:error, {kind, reason}}
-  end
+    _ = {sql, params}
 
-  defp database_opts do
-    settings = Config.settings!().tracker
-    url = clean_string(settings.database_url) || clean_string(System.get_env("PITCHAI_PM_DATABASE_URL"))
-
-    if is_nil(url) do
-      raise ArgumentError, "missing PitchAI PM database URL"
-    end
-
-    url
-    |> database_opts_from_url()
-    |> Keyword.merge(connect_timeout: @connect_timeout)
-  end
-
-  defp database_opts_from_url(url) do
-    uri = URI.parse(url)
-    database = database_from_path(uri.path)
-    {username, password} = credentials_from_userinfo(uri.userinfo)
-
-    cond do
-      uri.scheme not in ["postgres", "postgresql"] ->
-        raise ArgumentError, "PitchAI PM database URL must use postgres:// or postgresql://"
-
-      clean_string(uri.host) == nil ->
-        raise ArgumentError, "PitchAI PM database URL is missing a host"
-
-      database == nil ->
-        raise ArgumentError, "PitchAI PM database URL is missing a database name"
-
-      username == nil ->
-        raise ArgumentError, "PitchAI PM database URL is missing a username"
-
-      password == nil ->
-        raise ArgumentError, "PitchAI PM database URL is missing a password"
-
-      true ->
-        [
-          hostname: uri.host,
-          port: uri.port || 5432,
-          username: username,
-          password: password,
-          database: database
-        ]
-    end
-  end
-
-  defp database_from_path(nil), do: nil
-
-  defp database_from_path(path) do
-    path
-    |> String.trim_leading("/")
-    |> URI.decode()
-    |> clean_string()
-  end
-
-  defp credentials_from_userinfo(nil), do: {nil, nil}
-
-  defp credentials_from_userinfo(userinfo) do
-    case String.split(userinfo, ":", parts: 2) do
-      [username, password] -> {decode_userinfo(username), decode_userinfo(password)}
-      [username] -> {decode_userinfo(username), nil}
-    end
-  end
-
-  defp decode_userinfo(value) do
-    value
-    |> URI.decode()
-    |> clean_string()
+    retired_error()
   end
 
   defp row_to_issue(columns, row) do

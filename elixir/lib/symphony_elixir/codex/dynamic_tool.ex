@@ -28,7 +28,7 @@ defmodule SymphonyElixir.Codex.DynamicTool do
 
   @pitchai_pm_tool "pitchai_pm"
   @pitchai_pm_description """
-  Execute a narrow operation against the PitchAI project-management database.
+  Retired. The legacy pitchai_symphony schema and Symphony pitchai_pm client are retired. Use supported PM tables in public.* and Dispatcher tables in pitchai_dispatch.* instead.
   """
   @pitchai_pm_input_schema %{
     "type" => "object",
@@ -287,6 +287,16 @@ defmodule SymphonyElixir.Codex.DynamicTool do
 
   defp pitchai_pm_error_payload(:invalid_pitchai_pm_arguments) do
     %{"error" => %{"message" => "`pitchai_pm` expects an object with `operation` and `params`."}}
+  end
+
+  defp pitchai_pm_error_payload({:pitchai_symphony_retired, message}) do
+    %{
+      "error" => %{
+        "message" => message,
+        "retiredSchema" => "pitchai_symphony",
+        "supportedSchemas" => ["public", "pitchai_dispatch"]
+      }
+    }
   end
 
   defp pitchai_pm_error_payload(reason) do

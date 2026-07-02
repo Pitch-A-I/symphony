@@ -22,7 +22,7 @@ defmodule SymphonyElixir.Codex.DynamicToolTest do
     assert description =~ "Linear"
   end
 
-  test "tool_specs advertises blocker reconciliation operations for pitchai_pm" do
+  test "tool_specs advertises pitchai_pm as retired" do
     write_workflow_file!(Workflow.workflow_file_path(),
       tracker_kind: "pitchai_pm",
       tracker_project_id: "project-pm",
@@ -35,15 +35,43 @@ defmodule SymphonyElixir.Codex.DynamicToolTest do
                  "properties" => %{
                    "operation" => %{"description" => operation_description}
                  }
-               },
+               } = input_schema,
+               "description" => description,
                "name" => "pitchai_pm"
              }
            ] = DynamicTool.tool_specs()
 
-    assert operation_description =~ "list_blocked_tasks"
-    assert operation_description =~ "list_blocker_tasks"
-    assert operation_description =~ "link_task_dependency"
-    assert operation_description =~ "merge_duplicate_blocker_task"
+    assert input_schema["required"] == ["operation", "params"]
+    assert operation_description =~ "get_task"
+    assert description =~ "Retired"
+    assert description =~ "pitchai_symphony"
+    assert description =~ "public.*"
+    assert description =~ "pitchai_dispatch.*"
+  end
+
+  test "pitchai_pm execution fails loudly because pitchai_symphony is retired" do
+    write_workflow_file!(Workflow.workflow_file_path(),
+      tracker_kind: "pitchai_pm",
+      tracker_project_id: "project-pm",
+      tracker_database_url: "postgresql://postgres:postgres@127.0.0.1:5432/test"
+    )
+
+    response =
+      DynamicTool.execute("pitchai_pm", %{
+        "operation" => "get_task",
+        "params" => %{"task_id" => "00000000-0000-0000-0000-000000000000"}
+      })
+
+    assert response["success"] == false
+
+    assert Jason.decode!(response["output"]) == %{
+             "error" => %{
+               "message" =>
+                 "The legacy pitchai_symphony schema and Symphony pitchai_pm client are retired. Use supported PM tables in public.* and Dispatcher tables in pitchai_dispatch.* instead.",
+               "retiredSchema" => "pitchai_symphony",
+               "supportedSchemas" => ["public", "pitchai_dispatch"]
+             }
+           }
   end
 
   test "unsupported tools return a failure payload with the supported tool list" do
