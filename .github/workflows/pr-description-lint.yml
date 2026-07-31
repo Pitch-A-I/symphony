@@ -6,7 +6,9 @@ on:
 
 jobs:
   validate-pr-description:
-    runs-on: ubuntu-latest
+    runs-on:
+      group: ci-linux-untrusted
+      labels: linux-fork-x64-v1
     defaults:
       run:
         working-directory: elixir

@@ -1,0 +1,51 @@
+name: AX41 disposable public runner canary
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - pitchai/symphony-repo/ax41-selfhosted-selectors-20260730
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ax41-ci-untrusted-canary
+  cancel-in-progress: false
+
+jobs:
+  leave-disposable-marker:
+    if: vars.AX41_CI_CANARY_ENABLED == '1'
+    runs-on:
+      group: ci-linux-untrusted
+      labels: linux-fork-x64-v1
+    timeout-minutes: 10
+    steps:
+      - name: Prove public runner boundary
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          [[ "$RUNNER_NAME" == ax41-untrusted-01 ]]
+          [[ "${AX41_CI_POOL_MODE:-}" == untrusted ]]
+          if timeout 3 bash -c '</dev/tcp/65.108.110.42/22' 2>/dev/null; then
+            echo "Public runner unexpectedly reached the AX41 host network." >&2
+            exit 1
+          fi
+          printf '%s\n' "${GITHUB_RUN_ID}" >"$HOME/ax41-ci-disposable-marker"
+          test -s "$HOME/ax41-ci-disposable-marker"
+
+  prove-fresh-overlay:
+    if: vars.AX41_CI_CANARY_ENABLED == '1'
+    needs: leave-disposable-marker
+    runs-on:
+      group: ci-linux-untrusted
+      labels: linux-fork-x64-v1
+    timeout-minutes: 10
+    steps:
+      - name: Prove prior writable disk was destroyed
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          [[ "$RUNNER_NAME" == ax41-untrusted-01 ]]
+          [[ "${AX41_CI_POOL_MODE:-}" == untrusted ]]
+          test ! -e "$HOME/ax41-ci-disposable-marker"
