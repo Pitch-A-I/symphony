@@ -14,7 +14,9 @@ concurrency:
 
 jobs:
   check:
-    runs-on: ubuntu-22.04
+    runs-on:
+      group: ci-linux-untrusted
+      labels: linux-fork-x64-v1
     timeout-minutes: 45
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
