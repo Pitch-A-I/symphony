@@ -1,5 +1,4 @@
 {
-  "schema": 1,
   "files": {
     "QUALITY.md": "1b8630e818d571bd472cfab3bd07588e1de726a2cc868b2b285deca29458d807",
     "quality/.gitignore": "9c7bcd3943d0972b48a7484f6a2a3635bfaa89db04176068f3afab590ef7785e",
@@ -17,8 +16,9 @@
     "quality/pitchai_quality/pure_wrapper_resolution.py": "0c42e1489804f28705a112658dbe9cbde4b6354e83083dadd063d9637c4dd3a4",
     "quality/pitchai_quality/single_use_reporting.py": "15c3234eb503abeeac0844fa491ed2d2532ce009b28a47f14a1520af729cdadb",
     "quality/pitchai_quality/source_files.py": "fb53f3871634d650ed3dcd3ffa3a8f435f1800eb8f1697c368f8377d9406dd26",
-    "quality/pitchai_quality/strict_policy.py": "e0712dc31ca5fbecf05da7aea14c9311355263ec0e964061f738876282c6d2e9",
+    "quality/pitchai_quality/strict_policy.py": "9d7498c7964a55b7862543dc6d5e04527dceb20d1ff0c232b482f69a16c2d2ab",
     "quality/pyproject.toml": "e3fab0ba7192bf73ea91a011a2a2f59044f4416a9122494c32a844ae3e3c329d",
     "quality/uv.lock": "5902b8f54fdb6f8a6ebaa0e9e6ed585a6fa40af8bbbb74179965ce8c39a05565"
-  }
+  },
+  "schema": 1
 }

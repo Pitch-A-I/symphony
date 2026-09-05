@@ -124,7 +124,7 @@ EXPECTED_BUILD_SYSTEM: Mapping[str, TomlValue] = {
     "requires": ["setuptools==80.10.2"],
     "build-backend": "setuptools.build_meta",
 }
-EXPECTED_NORMALIZED_STRICT_WORKFLOW_SHA256 = "9f50aaca64d0268a565cf42235e073fae2dfa195555e36c6757faf44598cd71f"
+EXPECTED_NORMALIZED_STRICT_WORKFLOW_SHA256 = "9cad625b2d8d0435528b5405764cd0836097344ab371858fbb526ecf7a316ee0"
 RUFF_ARGUMENTS = (
     "check",
     "--no-cache",
