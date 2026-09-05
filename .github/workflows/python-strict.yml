@@ -14,7 +14,9 @@ concurrency:
 
 jobs:
   check:
-    runs-on: ubuntu-22.04
+    runs-on:
+      group: ci-linux-untrusted
+      labels: linux-fork-x64-v1
     timeout-minutes: 45
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
@@ -26,7 +28,7 @@ jobs:
         run: |
           set -euo pipefail
           verifier_path="quality/pitchai_quality/check_no_validation_bypasses.py"
-          expected_verifier_sha256="b6a61700350d951d80fb1a4f966928ffcfe7395533ec888f028436f14be9c2a8"
+          expected_verifier_sha256="444bd142cce73de918855e87080b106b41ae84d57cb699c6d08b5a92d536648f"
           actual_verifier_sha256="$(sha256sum "$verifier_path" | awk '{print $1}')"
           if [[ "$actual_verifier_sha256" != "$expected_verifier_sha256" ]]; then
             printf '%s: SHA-256 trust anchor mismatch (expected %s, got %s)\n' \
